@@ -1,4 +1,7 @@
 $ErrorActionPreference = 'Stop'
+# Qt uses Windows ICU. Unrelated Codex/Poppler ICU on PATH has incompatible
+# versioned exports and must not be collected into the application bundle.
+$env:PATH = (($env:PATH -split ';') | Where-Object { $_ -notmatch 'codex-runtimes|[\\/]poppler[\\/]' }) -join ';'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dist = Join-Path $root 'dist_folder'
 $version = $env:VIDEO_TOOLKIT_VERSION
@@ -27,7 +30,7 @@ $mediaBin = if ($env:VIDEO_TOOLKIT_MEDIA_BIN) {
 if (-not (Test-Path (Join-Path $mediaBin 'ffmpeg.exe')) -or -not (Test-Path (Join-Path $mediaBin 'ffprobe.exe'))) {
   throw 'FFmpeg and FFprobe were not found. Set VIDEO_TOOLKIT_MEDIA_BIN or place them in tools\ffmpeg\bin.'
 }
-python -m PyInstaller --noconfirm --windowed --onedir --contents-directory 'internal' `
+python -m PyInstaller --clean --noconfirm --windowed --onedir --contents-directory 'internal' `
   --name 'VideoToolkit' `
   --icon (Join-Path $root 'logo.ico') `
   --add-data ((Join-Path $root 'logo.ico') + ';.') `
