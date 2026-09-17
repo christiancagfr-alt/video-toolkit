@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import subprocess
 import time
 from pathlib import Path
@@ -220,13 +219,9 @@ def caption_content_at(t_sec: float, phrase_srt: str, word_srt: str, settings: d
     if not phrases:
         return "", [], 0, ""
 
-    event = next((item for item in phrases if item[0] - 0.02 <= t <= item[1] + 0.02), None)
+    event = next((item for item in phrases if item[0] <= t < item[1]), None)
     if event is None:
-        past = [item for item in phrases if item[0] <= t]
-        if past and t - past[-1][1] <= 0.8:
-            event = past[-1]
-        else:
-            event = min(phrases, key=lambda item: abs(((item[0] + item[1]) / 2) - t))
+        return "", [], 0, ""
 
     start, end, text = float(event[0]), float(event[1]), str(event[2] or "")
     tokens = tokens_for(text)
@@ -315,7 +310,9 @@ def paint_caption_overlay_image(
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
     try:
-        if effect in SEMANTIC_LAYOUT_EFFECTS:
+        if preset.get("effect") == "three_bands":
+            paint_three_bands(painter, text, settings)
+        elif effect in SEMANTIC_LAYOUT_EFFECTS:
             _paint_semantic(
                 painter, settings, preset, tokens, cut, effect,
                 base_color, outline, highlight, pen_width, fixed_all,
@@ -329,6 +326,60 @@ def paint_caption_overlay_image(
     finally:
         painter.end()
     return image
+
+
+def three_band_geometry(text, settings):
+    """Shared 1080x1920 geometry for preview, Qt burn and ASS fallback."""
+    import textwrap
+    from PySide6.QtGui import QFontMetricsF
+    lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+    if len(lines) == 1:
+        lines = textwrap.wrap(lines[0], width=max(8, int(settings.get("line_length", 42))), break_long_words=False)
+    if not lines:
+        return QFont(), []
+    font = QFont(str(settings.get("font") or "Roboto Condensed"))
+    font.setBold(True)
+    font.setPixelSize(max(20, int(settings.get("font_size") or 64)))
+    metrics = QFontMetricsF(font)
+    pad_x = max(0, int(settings.get("highlight_padding", 28)))
+    pad_y = max(0, int(settings.get("highlight_padding_y", 18)))
+    max_width = 1080 * max(20, min(100, float(settings.get("line_width", 94)))) / 100
+    widest = max(metrics.horizontalAdvance(line) for line in lines)
+    if widest + 2 * pad_x > max_width:
+        font.setPixelSize(max(20, int(font.pixelSize() * max(1, max_width - 2 * pad_x) / max(1, widest))))
+        metrics = QFontMetricsF(font)
+        # Font fallback and pixel rounding need not scale metrics linearly.
+        while font.pixelSize() > 20 and max(metrics.horizontalAdvance(line) for line in lines) + 2 * pad_x > max_width:
+            font.setPixelSize(font.pixelSize() - 1)
+            metrics = QFontMetricsF(font)
+    row_h = metrics.height() + 2 * pad_y
+    gap = max(0., row_h * (float(settings.get("line_spacing", 100)) / 100 - 1))
+    total = len(lines) * row_h + (len(lines) - 1) * gap
+    position = settings.get("position", "画面中间")
+    margin = float(settings.get("margin_v", 500))
+    y = (1920 - total) / 2 if position == "画面中间" else (margin if position == "顶部" else 1920 - margin - total)
+    foreground = [settings.get("text_color") or "#FFFFFF", settings.get("active_text_color") or "#111111", settings.get("outline_color") or "#FFFFFF"]
+    backgrounds = [settings.get("background_color") or "#00A526", settings.get("highlight_color") or "#FFFFFF", settings.get("band_last_background") or "#000000"]
+    rows = []
+    for index, line in enumerate(lines):
+        width = metrics.horizontalAdvance(line) + 2 * pad_x
+        rect = QRectF((1080 - width) / 2, y, width, row_h)
+        rows.append(dict(text=line, rect=rect, baseline=y + pad_y + metrics.ascent(),
+                         x=rect.x() + pad_x, foreground=foreground[min(index, 2)], background=backgrounds[min(index, 2)]))
+        y += row_h + gap
+    return font, rows
+
+
+def paint_three_bands(painter, text, settings):
+    font, rows = three_band_geometry(text, settings)
+    painter.save()
+    painter.setFont(font)
+    for row in rows:
+        painter.fillRect(row["rect"], QColor(row["background"]))
+        path = QPainterPath()
+        path.addText(row["x"], row["baseline"], font, row["text"])
+        painter.fillPath(path, QColor(row["foreground"]))
+    painter.restore()
 
 
 def parse_first_text(phrase_srt: str, word_srt: str) -> str:
@@ -628,24 +679,17 @@ def bake_qt_caption_overlay_mov(
             seg_start = t
             last_key = key
     segments.append((seg_start, duration, last_key))
-    # Drop empty / tiny
-    segments = [(a, b, k) for a, b, k in segments if b - a >= 0.02 and k and k[0]]
+    # Blank states are real time: removing them advances all later captions.
+    segments = [(a, b, k) for a, b, k in segments if b > a]
 
-    # 段数过多会写上千张全高清 PNG → 磁盘打满、内存爆、界面未响应甚至崩溃
-    max_segments = 320
-    if len(segments) > max_segments:
-        _log(f"Qt 字幕状态过多（{len(segments)}），合并为 ≤{max_segments} 段以保证稳定…")
-        step = max(1, int(math.ceil(len(segments) / max_segments)))
-        merged = []
-        for i in range(0, len(segments), step):
-            chunk = segments[i:i + step]
-            merged.append((chunk[0][0], chunk[-1][1], chunk[len(chunk) // 2][2]))
-        segments = merged
-
+    # 禁止「合并不同跟读状态」：用中间段的 cut 覆盖整段会让高亮提前（导出字幕偏快）。
+    # 段数过多时直接回退 ASS，而不是错合状态。
     cue_count = str(phrase_srt or "").count("-->") + str(word_srt or "").count("-->")
-    if cue_count > 900 or duration > 900 or len(segments) > 480:
+    max_segments = 360
+    if len(segments) > max_segments or cue_count > 900 or duration > 900:
         raise RuntimeError(
-            f"字幕过密/过长（cue≈{cue_count}, 段={len(segments)}, {duration:.0f}s），改用 ASS 烧录以保证不卡死"
+            f"字幕过密/过长（cue≈{cue_count}, 段={len(segments)}, {duration:.0f}s），"
+            f"改用 ASS 烧录以保证口型不被错误合并"
         )
 
     # 几何按 1080×1920 排版；勿缩画布（会画到画外）。靠限段数 + 及时释放控内存。
@@ -687,10 +731,12 @@ def bake_qt_caption_overlay_mov(
         # concat paths: escape single quotes
         p = str(png.resolve()).replace("\\", "/").replace("'", r"'\''")
         lines.append(f"file '{p}'")
-        lines.append(f"duration {max(0.02, t1 - t0):.4f}")
+        lines.append("option framerate 1000")
+        lines.append(f"duration {t1 - t0:.6f}")
     # last file must repeat without duration
     last = str(png_paths[-1].resolve()).replace("\\", "/").replace("'", r"'\''")
     lines.append(f"file '{last}'")
+    lines.append("option framerate 1000")
     list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     out_mov = work / "caption_overlay.mov"
@@ -699,7 +745,7 @@ def bake_qt_caption_overlay_mov(
         str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
         "-f", "concat", "-safe", "0", "-i", str(list_path),
         "-vf", f"scale={tw}:{th}:flags=lanczos,format=rgba",
-        "-c:v", "png", "-an",
+        "-c:v", "png", "-fps_mode", "vfr", "-an",
         "-t", f"{duration:.4f}",
         str(out_mov),
     ]

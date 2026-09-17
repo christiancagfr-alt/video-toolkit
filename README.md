@@ -2,7 +2,24 @@
 
 一站式桌面视频工作台，将批量截图、智能剪辑、Reels 编辑、批量重命名、元数据清理、字幕提取和自动上传填表集中在同一个 PySide6 界面中。
 
-当前版本：**v1.7.61**
+当前版本：**v1.7.62**
+
+### Reels v1.7.62（2026-09-17）
+
+- 新增“蒙版与图层 → 三行分色文字底板”：无需识别字幕，直接生成三行可编辑文字与自动背景，可逐行修改字体、文字色和背景色，设置时间后加入声明轨。不会替换已有字幕文案。
+- 上下拼接默认完整显示、不裁剪；自定义取景可分别调整上下视频的横向和纵向位置。点“生成并加入视频字幕”后，生成文件加入现有队列，再提取字幕、校对和批量导出。
+- 新增 **上下拼接**：Reels 左侧入口，两个画面同时播放。默认上 64% / 下 36%，输出 1080×1920、30 fps；可调比例、居中裁满/完整留边、上方声音/下方声音/混音/静音。按上方/较短/较长时长输出，短素材循环。先预览首组 3 秒，再批量导出；可上下等量配对，或固定一侧素材复用。仅清理本次未完成临时文件，不覆盖原素材和已有成品。
+
+- 删除中间片段、连续裁剪及撤销时，字幕按对白音轨的源时间重新映射；替换图片不移动原声字幕。
+- Qt 字幕烧录保留无字幕间隔，以毫秒时间戳输出透明字幕轨；没有有效字幕时不再显示最近一句。
+- 裁剪后重提的词轴不再覆盖原始视频的旁路字幕缓存。识别期间若继续剪辑，旧剪辑结果会被丢弃。
+- 字幕识别区新增“批量校对”：逐视频粘贴原文案，或导入与视频同名的 UTF-8 TXT；自动对比后勾选替换。重名视频不自动匹配 TXT。
+- 校对尽量保留匹配词的真实时间，仅对改动词估时；估时不能保证准确，必须试听核对。
+- “滚动字幕 · 上浮”使用自由文案模式，让整段文案从下往上滚动；不是逐词对口型模式。
+- “剪辑后自动重提”默认关闭，需要时可以手动点击“裁剪后重提”，避免每次编辑都重复烘焙和识别。
+
+源码回归：`python -B test_caption_clock_regression.py`、`python -B test_post_cut_caption_sync.py`。
+本候选未打包或发布；真实口播识别精度与长视频性能仍需使用实际素材验收。
 
 [查看最新版本与更新说明](https://github.com/secure-artifacts/video-toolkit/releases/latest)
 
@@ -56,7 +73,7 @@ BGM/文字配音的切片与时间位置也会合成为独立音轨。分组合�
 
 | 系统 | 安装包 |
 | --- | --- |
-| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.61.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.61/video-toolkit-windows-x64-v1.7.61.zip) · [安装包 Setup](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.61/VideoToolkit_Setup_v1.7.61.exe) |
+| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.62.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.62/video-toolkit-windows-x64-v1.7.62.zip) · [安装包 Setup](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.62/VideoToolkit_Setup_v1.7.62.exe) |
 | Linux x64 | [video-toolkit-linux-x64-v1.7.61.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.61/video-toolkit-linux-x64-v1.7.61.zip) |
 | macOS Apple Silicon | [video-toolkit-macos-arm64-v1.7.61.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.61/video-toolkit-macos-arm64-v1.7.61.zip) |
 | macOS Intel | [video-toolkit-macos-x64-v1.7.61.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.61/video-toolkit-macos-x64-v1.7.61.zip) |

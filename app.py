@@ -79,7 +79,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.61").strip().lstrip("v") or "1.7.61"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.62").strip().lstrip("v") or "1.7.62"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 _SINGLE_INSTANCE_MUTEX = None
 ALL_RESULTS_LABEL = "【全部结果】"
@@ -93,7 +93,8 @@ DEFAULT_MODELS = {
     LOCAL_PROVIDER: "medium",
     # turbo 在部分希腊语/宗教口播上会幻觉成「Υπότιτλοι AUTHORWAVE」；large-v3 更稳
     "Groq": "whisper-large-v3",
-    "Gemini": "gemini-2.0-flash",
+    # gemini-2.0-flash 已于 2026-06-01 关停；字幕多模态用 3.6 Flash（稳定）
+    "Gemini": "gemini-3.6-flash",
     "ElevenLabs": "scribe_v2",
     "Gladia": "default",
     "Luma": "default",
@@ -116,10 +117,21 @@ _MODEL_MIGRATIONS = {
         "whisper-large-v3-turbo-latest": "whisper-large-v3",
     },
     "Gemini": {
-        "gemini-1.5-flash": "gemini-2.0-flash",
-        "gemini-1.5-flash-latest": "gemini-2.0-flash",
-        "gemini-1.5-pro": "gemini-2.0-flash",
-        # 3.5 在部分账号可用，但免费额度更易 429；保留用户自选不强制改 3.5
+        # 1.x / 2.0 系列已关停 → 3.6 Flash
+        "gemini-1.5-flash": "gemini-3.6-flash",
+        "gemini-1.5-flash-latest": "gemini-3.6-flash",
+        "gemini-1.5-pro": "gemini-3.6-flash",
+        "gemini-2.0-flash": "gemini-3.6-flash",
+        "gemini-2.0-flash-001": "gemini-3.6-flash",
+        "gemini-2.0-flash-lite": "gemini-3.1-flash-lite",
+        "gemini-2.0-flash-lite-001": "gemini-3.1-flash-lite",
+        "gemini-2.5-flash": "gemini-3.6-flash",
+        "gemini-2.5-flash-lite": "gemini-3.1-flash-lite",
+        "gemini-3.5-flash": "gemini-3.6-flash",  # 旧默认别名，升到现行稳定 Flash
+    },
+    "ElevenLabs": {
+        "scribe_v1": "scribe_v2",
+        "scribe_v1_experimental": "scribe_v2",
     },
 }
 DEFAULT_SHEET_MAPPINGS = [
@@ -821,7 +833,8 @@ class TranscribeWorker(QObject):
 
     def __init__(self, store: ConfigStore, provider: str, model: str, files: list[str],
                  output_dir: str, language: str, diarize: bool, ffmpeg_path: str,
-                 resume_existing: bool = True, allow_provider_fallback: bool = True):
+                 resume_existing: bool = True, allow_provider_fallback: bool = True,
+                 translate_result: bool = True):
         super().__init__()
         self.store = store
         self.provider = provider
@@ -835,6 +848,10 @@ class TranscribeWorker(QObject):
         self._local_device = None
         self.resume_existing = resume_existing
         self.allow_provider_fallback = allow_provider_fallback
+        # Reels only needs the original transcript and word timestamps.  Translating
+        # every result here can take longer than ASR itself when the free translator
+        # is rate-limited, so callers that only need a timeline may opt out.
+        self.translate_result = bool(translate_result)
         task_payload = {
             "version": 2, "provider": provider, "model": model,
             "language": self.language, "diarize": bool(diarize),
@@ -1112,7 +1129,9 @@ class TranscribeWorker(QObject):
                 srt, plain, raw = self._call_provider(recognition_input, item["key"], temp)
                 srt = normalize_required_capitalization(srt)
                 plain = normalize_required_capitalization(plain)
-                chinese = self._translate_chinese(plain)
+                chinese = self._translate_chinese(plain) if self.translate_result else ""
+                if not self.translate_result:
+                    self.log.emit("已生成精确时间轴；Reels 快速模式跳过中文对照翻译。")
                 self.result_ready.emit(result_name, plain, chinese, srt)
                 if self.provider != LOCAL_PROVIDER:
                     self.store.mark_use(self.provider, item["id"], "有效", "")
@@ -1144,7 +1163,7 @@ class TranscribeWorker(QObject):
                 write_app_log(f"{primary_error}；切换到 {provider}","WARNING","字幕识别")
                 child=TranscribeWorker(self.store,provider,self.store.data["models"].get(provider,DEFAULT_MODELS[provider]),[],
                                        str(self.output_dir),self.language,self.diarize,self.ffmpeg_path,
-                                       self.resume_existing,False)
+                                       self.resume_existing,False,self.translate_result)
                 child.log.connect(self.log.emit); child.result_ready.connect(self.result_ready.emit)
                 try: return child._process_one(source_value)
                 except Exception as exc:
@@ -1272,7 +1291,37 @@ class TranscribeWorker(QObject):
                 _emit(f"本地 Whisper 模型已就绪：{model_name}（{self._local_device}）")
 
         language = None if not self.language or self.language == "auto" else self.language
-        _emit(f"开始本地识别：{audio.name} …")
+
+        # 先抽 mono 16k WAV：本地 Whisper 解码更快、时间戳更稳（避免直接喂整段 mp4 又慢又容易第一次对不齐）
+        asr_audio = Path(audio)
+        prep_wav = None
+        try:
+            import tempfile
+            creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            prep_dir = Path(tempfile.mkdtemp(prefix="vt_whisper_"))
+            prep_wav = prep_dir / "asr_16k.wav"
+            _emit(f"本地识别：抽取音轨 {audio.name} → 16k mono …")
+            prep = subprocess.run(
+                [
+                    self.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(audio), "-map", "0:a:0", "-vn",
+                    "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                    str(prep_wav),
+                ],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                creationflags=creation, text=True, encoding="utf-8", errors="replace",
+            )
+            if prep.returncode == 0 and prep_wav.is_file() and prep_wav.stat().st_size > 1000:
+                asr_audio = prep_wav
+            else:
+                err = (prep.stderr or "")[-400:]
+                _emit(f"16k 抽取未成功，回退源文件识别：{err or 'unknown'}")
+                prep_wav = None
+        except Exception as prep_exc:
+            _emit(f"16k 抽取异常，回退源文件：{prep_exc}")
+            prep_wav = None
+
+        _emit(f"开始本地识别：{asr_audio.name} …")
 
         def collect_segments(stream, info):
             segments = []
@@ -1286,26 +1335,56 @@ class TranscribeWorker(QObject):
                     _emit(f"本地识别中：已生成 {len(segments)} 条字幕 …")
             return segments, info
 
-        def transcribe_with(model):
+        def transcribe_with(model, *, beam_size=None, use_vad=None):
             try:
                 import onnxruntime  # noqa: F401
-                use_vad = True
+                vad_default = True
             except ImportError:
-                use_vad = False
-                _emit("未检测到 ONNX Runtime，已自动关闭 VAD 静音过滤并继续识别。")
+                vad_default = False
+                if use_vad is None:
+                    _emit("未检测到 ONNX Runtime，已自动关闭 VAD 静音过滤并继续识别。")
+            if use_vad is None:
+                use_vad = vad_default
             try:
-                stream, info = model.transcribe(str(audio), language=language, beam_size=5,
-                                                vad_filter=use_vad, word_timestamps=True)
+                # CPU 用更小 beam，显著提速；GPU 可略高
+                if beam_size is None:
+                    beam_size = 3 if self._local_device == "cuda" else 2
+                stream, info = model.transcribe(
+                    str(asr_audio), language=language, beam_size=beam_size,
+                    vad_filter=use_vad, word_timestamps=True,
+                    condition_on_previous_text=False,
+                    vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 160}
+                    if use_vad else None,
+                )
                 return collect_segments(stream, info)
             except RuntimeError as exc:
                 if not use_vad or "onnxruntime" not in str(exc).lower():
                     raise
                 _emit("VAD 组件不可用，已关闭静音过滤并自动重试当前视频。")
-                stream, info = model.transcribe(str(audio), language=language, beam_size=5,
-                                                vad_filter=False, word_timestamps=True)
+                stream, info = model.transcribe(
+                    str(asr_audio), language=language, beam_size=2,
+                    vad_filter=False, word_timestamps=True,
+                    condition_on_previous_text=False,
+                )
                 return collect_segments(stream, info)
+
+        def _word_density_ok(segs) -> bool:
+            """词级过稀时口型必飘：用于触发一次更稳的重试。"""
+            if not segs:
+                return False
+            n_words = sum(len(s.get("words") or []) for s in segs)
+            dur = max(0.5, float(segs[-1].get("end") or 0) - float(segs[0].get("start") or 0))
+            # 约每 1.2s 至少一个词；过稀则认为失败
+            return n_words >= max(3, int(dur / 1.35))
+
         try:
             segments, info = transcribe_with(self._local_model)
+            # 第一次结果词级过稀：关 VAD 再跑一遍（常见「第一次对不上、再提才准」）
+            if not _word_density_ok(segments):
+                _emit("本地识别词级偏稀，关闭 VAD 自动重试一次以提高口型对齐…")
+                segments2, info2 = transcribe_with(self._local_model, beam_size=2, use_vad=False)
+                if _word_density_ok(segments2) or len(segments2) >= len(segments):
+                    segments, info = segments2, info2
         except RuntimeError as exc:
             if self._local_device != "cuda" or self.cancelled:
                 raise
@@ -1328,6 +1407,12 @@ class TranscribeWorker(QObject):
                "language": detected, "segments": segments,
                "words": [word for segment in segments for word in segment.get("words", [])]}
         _emit(f"本地识别完成：{audio.name}（{len(segments)} 段）")
+        try:
+            if prep_wav is not None:
+                import shutil
+                shutil.rmtree(prep_wav.parent, ignore_errors=True)
+        except Exception:
+            pass
         return segments_to_srt(segments, language=detected), plain, raw
 
     def _groq_payload_is_suspicious(self, payload: dict, duration: float) -> str:
@@ -1547,36 +1632,73 @@ class TranscribeWorker(QObject):
             except Exception:
                 break
         prompt = (
-            "请准确转写这段音频，并只输出标准 SRT 字幕。要求：保留原语言；每条字幕包含序号、"
-            "HH:MM:SS,mmm 时间码和正文；合理断句；不要 Markdown 代码框，不要解释。"
+            "请准确转写这段音频，并只输出标准 SRT 字幕（不要 Markdown、不要解释）。\n"
+            "硬性要求：\n"
+            "1) 保留原语言；\n"
+            "2) 必须是【词级】时间轴：每一条 SRT 只写一个词（或一个很短的语气词），"
+            "时间码必须对齐该词真实开口与收口，禁止把整句塞进一条；\n"
+            "3) 格式：序号 / HH:MM:SS,mmm --> HH:MM:SS,mmm / 正文；\n"
+            "4) 词与词之间时间连续、不重叠；静音处不要编造词。\n"
+            "若无法做到词级，也请尽量短切（每条≤2个词），时间码仍须贴合口播节奏。"
         )
         if self.language and self.language != "auto":
-            prompt += f" 音频语言代码提示：{self.language}。"
+            prompt += f"\n音频语言代码提示：{self.language}。"
         body = {"contents": [{"parts": [{"text": prompt}, {"file_data": {
             "mime_type": mime, "file_uri": file_uri}}]}],
                 "generationConfig": {"temperature": 0.1}}
         try:
             model_name = self.model or DEFAULT_MODELS["Gemini"]
-            self.log.emit(f"Gemini 正在生成带时间码字幕（{model_name}）…")
-            resp = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-                headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body, timeout=1200)
-            if resp.status_code >= 300:
+            # 旧模型名热迁移（即使用户配置未重启）
+            model_name = _MODEL_MIGRATIONS.get("Gemini", {}).get(model_name, model_name)
+            fallbacks = [model_name]
+            for alt in ("gemini-3.6-flash", "gemini-3.8-flash", "gemini-2.5-flash"):
+                if alt not in fallbacks:
+                    fallbacks.append(alt)
+            payload = None
+            used_model = model_name
+            last_err = ""
+            for try_model in fallbacks:
+                self.log.emit(f"Gemini 正在生成带时间码字幕（{try_model}）…")
+                resp = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{try_model}:generateContent",
+                    headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                    json=body, timeout=1200,
+                )
+                if resp.status_code < 300:
+                    payload = resp.json()
+                    used_model = try_model
+                    break
                 msg = response_error(resp)
+                last_err = msg
+                # 模型关停 / 不存在：换下一个
+                if resp.status_code in (404, 400) and (
+                    "not found" in msg.casefold()
+                    or "not supported" in msg.casefold()
+                    or "is not found" in msg.casefold()
+                    or "no longer available" in msg.casefold()
+                ):
+                    self.log.emit(f"Gemini 模型「{try_model}」不可用，尝试下一型号…")
+                    continue
                 if resp.status_code == 429:
                     msg = (
                         "Gemini 配额已用尽（429）。免费额度用完后需开通计费，"
                         "或暂时改用「本地 Whisper」/「Groq」。\n" + msg
                     )
                 raise ApiFailure(msg, resp.status_code)
-            payload = resp.json()
+            if payload is None:
+                raise ApiFailure(
+                    f"Gemini 模型均不可用（已试 {', '.join(fallbacks)}）。\n{last_err}",
+                    404,
+                )
             text = "\n".join(part.get("text", "") for cand in payload.get("candidates", [])
                               for part in cand.get("content", {}).get("parts", []))
             lang = None if not self.language or self.language == "auto" else self.language
             srt = clean_model_srt(text, language=lang)
             plain = re.sub(r"(?m)^\d+\s*$|^\d{2}:\d{2}:\d{2},\d{3} --> .*?$", "", srt)
             plain = re.sub(r"\n{2,}", "\n", plain).strip()
-            return srt, plain, {"provider": "Gemini", "response": payload, "language": lang}
+            return srt, plain, {
+                "provider": "Gemini", "response": payload, "language": lang, "model": used_model,
+            }
         finally:
             if file_name:
                 try:
@@ -1586,17 +1708,33 @@ class TranscribeWorker(QObject):
                     pass
 
     def _elevenlabs(self, audio: Path, key: str):
-        data = {"model_id": self.model, "tag_audio_events": "true",
+        model_id = str(self.model or DEFAULT_MODELS["ElevenLabs"] or "scribe_v2").strip()
+        model_id = _MODEL_MIGRATIONS.get("ElevenLabs", {}).get(model_id, model_id) or "scribe_v2"
+        if not model_id.startswith("scribe"):
+            model_id = "scribe_v2"
+        data = {"model_id": model_id, "tag_audio_events": "true",
                 "diarize": "true" if self.diarize else "false"}
         if self.language and self.language != "auto":
             data["language_code"] = self.language
-        self.log.emit("ElevenLabs Scribe 正在转写 …")
+        self.log.emit(f"ElevenLabs Scribe 正在转写（{model_id}）…")
         with audio.open("rb") as handle:
             resp = requests.post("https://api.elevenlabs.io/v1/speech-to-text",
                                  headers={"xi-api-key": key}, data=data,
                                  files={"file": (audio.name, handle, "audio/wav")}, timeout=1800)
         if resp.status_code >= 300:
-            raise ApiFailure(response_error(resp), resp.status_code)
+            # scribe_v1 已退役时自动改 scribe_v2 再试一次
+            err = response_error(resp)
+            if model_id != "scribe_v2" and resp.status_code in (400, 404, 422):
+                self.log.emit(f"ElevenLabs 模型「{model_id}」失败，改用 scribe_v2 重试…")
+                data["model_id"] = "scribe_v2"
+                with audio.open("rb") as handle2:
+                    resp = requests.post(
+                        "https://api.elevenlabs.io/v1/speech-to-text",
+                        headers={"xi-api-key": key}, data=data,
+                        files={"file": (audio.name, handle2, "audio/wav")}, timeout=1800,
+                    )
+            if resp.status_code >= 300:
+                raise ApiFailure(response_error(resp) if resp.status_code >= 300 else err, resp.status_code)
         payload = resp.json()
         segments = words_to_segments(payload.get("words", []))
         text = payload.get("text", "").strip()
@@ -1626,12 +1764,19 @@ class TranscribeWorker(QObject):
             raise ApiFailure(response_error(init), init.status_code)
         job = init.json()
         job_id = job.get("id")
+        # 新版返回 result_url（常为 /v2/transcription/{id}）；旧轮询 /v2/pre-recorded/{id} 会接口对不上
+        result_url = str(job.get("result_url") or "").strip()
+        if not result_url and job_id:
+            result_url = f"https://api.gladia.io/v2/transcription/{job_id}"
         self.log.emit(f"Gladia 任务已提交：{job_id}")
         for _ in range(720):
             if self.cancelled:
                 raise RuntimeError("任务已取消")
-            result = requests.get(f"https://api.gladia.io/v2/pre-recorded/{job_id}",
-                                  headers=headers, timeout=30)
+            result = requests.get(result_url, headers=headers, timeout=30)
+            if result.status_code == 404 and job_id and "/transcription/" in result_url:
+                # 兼容旧账号仍用 pre-recorded 路径
+                result_url = f"https://api.gladia.io/v2/pre-recorded/{job_id}"
+                result = requests.get(result_url, headers=headers, timeout=30)
             if result.status_code >= 300:
                 raise ApiFailure(response_error(result), result.status_code)
             payload = result.json()
@@ -3849,7 +3994,7 @@ class MainWindow(QMainWindow):
         self.model_edit.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.model_edit.setToolTip(
             "本地 Whisper：small 快 / medium 推荐（语义更稳）/ large-v3 最准。\n"
-            "Groq 建议 whisper-large-v3；Gemini 建议 gemini-2.0-flash。\n"
+            "Groq 建议 whisper-large-v3；Gemini 建议 gemini-3.6-flash（2.0 已关停）。\n"
             "自动模式显示「按优先级自动匹配」，本地体积在选中「本地 Whisper」时设置。"
         )
         form.addRow("模型", self.model_edit)
@@ -5118,7 +5263,13 @@ class MainWindow(QMainWindow):
             current = str(self.store.data["models"].get(provider, DEFAULT_MODELS[provider]) or "")
             presets = {
                 "Groq": ["whisper-large-v3", "whisper-large-v3-turbo"],
-                "Gemini": ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-3.5-flash"],
+                "Gemini": [
+                    "gemini-3.6-flash",
+                    "gemini-3.8-flash",
+                    "gemini-3.5-flash",
+                    "gemini-2.5-flash",
+                ],
+                "ElevenLabs": ["scribe_v2", "scribe_v1"],
                 "ElevenLabs": ["scribe_v2"],
                 "Gladia": ["default"],
             }.get(provider, [current or "default"])
@@ -5275,7 +5426,7 @@ class MainWindow(QMainWindow):
                 # resume_existing=False：避免误复用 subtitle_tasks 断点里的坏结果
                 worker = TranscribeWorker(
                     self.store, provider, model, [media_path], "", asr_language, False,
-                    self._find_ffmpeg(), False,
+                    self._find_ffmpeg(), False, True, False,
                 )
                 # 同步调用时 Signal 可能无接收端：双写到软件日志
                 worker.log.connect(lambda m: write_app_log(m, "INFO", "字幕识别"))
@@ -5321,6 +5472,20 @@ class MainWindow(QMainWindow):
                         "WARNING", "字幕识别",
                     )
                     precise_srt = result["srt"]
+                # 仍是句级（Gemini 常见）：按字长占比估词级，避免跟读「一词一分」假匀速
+                try:
+                    from modules.dynamic_caption_page import ensure_word_level_srt
+                    precise_srt, estimated = ensure_word_level_srt(
+                        precise_srt, str(result.get("srt") or ""),
+                    )
+                    if estimated:
+                        write_app_log(
+                            f"识别结果无真词级时间戳，已按字长占比估时（{precise_srt.count('-->')} 词段）；"
+                            f"对口型请优先 Groq / 本地 Whisper",
+                            "WARNING", "字幕识别",
+                        )
+                except Exception as expand_exc:
+                    write_app_log(f"词级估时跳过：{expand_exc}", "WARNING", "字幕识别")
                 # 长音频护栏：整段只出 1～2 条（Gemini 常见）对跟读/语义几乎无用，强制换下一方案
                 media_dur = 0.0
                 try:
@@ -5641,28 +5806,41 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("没有可用的 Gemini 密钥，请先到密钥管理添加并检测。")
             voice_name = (voice.split("｜", 1)[0].strip() if voice else "Kore") or "Kore"
             last_error = ""
+            tts_models = (
+                "gemini-3.1-flash-tts-preview",
+                "gemini-2.5-flash-preview-tts",
+                "gemini-2.5-pro-preview-tts",
+            )
             for item in candidates:
                 try:
-                    response = requests.post(
-                        "https://generativelanguage.googleapis.com/v1beta/models/"
-                        "gemini-2.5-flash-preview-tts:generateContent",
-                        params={"key": item["key"]},
-                        headers={"Content-Type": "application/json"},
-                        json={
-                            "contents": [{"parts": [{"text": str(text).strip()}]}],
-                            "generationConfig": {
-                                "responseModalities": ["AUDIO"],
-                                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {
-                                    "voiceName": voice_name}}},
-                            },
-                        }, timeout=240)
-                    if response.status_code >= 400:
+                    payload = None
+                    last_error = ""
+                    for tts_model in tts_models:
+                        response = requests.post(
+                            "https://generativelanguage.googleapis.com/v1beta/models/"
+                            f"{tts_model}:generateContent",
+                            params={"key": item["key"]},
+                            headers={"Content-Type": "application/json"},
+                            json={
+                                "contents": [{"parts": [{"text": str(text).strip()}]}],
+                                "generationConfig": {
+                                    "responseModalities": ["AUDIO"],
+                                    "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {
+                                        "voiceName": voice_name}}},
+                                },
+                            }, timeout=240)
+                        if response.status_code < 400:
+                            payload = response.json()
+                            break
                         last_error = response_error(response)
+                        if response.status_code in (404, 400) and "not found" in last_error.casefold():
+                            continue
+                        break
+                    if payload is None:
                         self.store.mark_use("Gemini", item["id"],
-                                            "失效" if response.status_code in (401, 403) else
-                                            "额度受限" if response.status_code == 429 else "异常", last_error)
+                                            "失效" if "401" in last_error or "403" in last_error else
+                                            "额度受限" if "429" in last_error else "异常", last_error)
                         continue
-                    payload = response.json()
                     parts = (((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
                     inline = next((part.get("inlineData") or part.get("inline_data")
                                    for part in parts if part.get("inlineData") or part.get("inline_data")), None)
