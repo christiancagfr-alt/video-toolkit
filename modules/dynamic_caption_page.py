@@ -6709,8 +6709,49 @@ class GroupCaptionDialog(QDialog):
         return out
 
 
+def batch_script_paste_assignments(text, rows, mode="order", start=0):
+    """Parse Sheets/Excel TSV, including quoted multiline cells, atomically."""
+    import csv
+    import io
+    records = list(csv.reader(io.StringIO(text), delimiter="\t", strict=True))
+    while records and not any(cell.strip() for cell in records[-1]):
+        records.pop()
+    if records and tuple(cell.strip().lower() for cell in records[0]) in (
+        ("文案",), ("正文",), ("视频", "文案"), ("文件名", "文案"),
+    ):
+        records.pop(0)
+    if not records:
+        raise ValueError("剪贴板没有文案。")
+    assignments = []
+    used = set()
+    for offset, record in enumerate(records):
+        if not record and mode == "order":
+            record = [""]
+        expected = 1 if mode == "order" else 2
+        if len(record) != expected:
+            raise ValueError(f"第 {offset + 1} 行需要 {expected} 列。请选择正确的粘贴方式；单元格内换行须保留表格复制格式。")
+        if mode == "order":
+            index = start + offset
+            if index >= len(rows):
+                raise ValueError("粘贴行数超过剩余视频数，未导入任何文案。")
+        else:
+            name = record[0].strip().casefold()
+            matches = [i for i, row in enumerate(rows) if Path(row["path"]).name.casefold() == name]
+            if len(matches) != 1:
+                raise ValueError(f"第 {offset + 1} 行文件名未找到或有重名：{record[0]}。请包含扩展名。")
+            index = matches[0]
+        if index in used:
+            raise ValueError("同一个视频出现多次，未导入任何文案。")
+        used.add(index)
+        if record[-1].strip():
+            assignments.append((index, record[-1].strip()))
+    if not assignments:
+        raise ValueError("文案均为空。空单元格保留原值，不会清空文案。")
+    return assignments
+
+
 class BatchScriptProofreadDialog(QDialog):
-    """Explicit per-video scripts; never distribute a script by list position."""
+    """Per-video scripts with explicit spreadsheet mapping and timed differences."""
     def __init__(self, parent, rows):
         super().__init__(parent)
         self.setWindowTitle("批量文案校对与替换")
@@ -6746,19 +6787,102 @@ class BatchScriptProofreadDialog(QDialog):
             self.table.setItem(index, 4, QTableWidgetItem("等待文案"))
             self.table.setRowHeight(index, 120)
         layout.addWidget(self.table)
+        self.detail_title = QLabel("选择视频查看时间戳及差异；此列表只显示已有字幕的视频")
+        layout.addWidget(self.detail_title)
+        details = QSplitter(Qt.Orientation.Horizontal)
+        self.original_detail = QPlainTextEdit(); self.original_detail.setReadOnly(True)
+        self.diff_detail = QTextBrowser()
+        self.corrected_detail = QPlainTextEdit(); self.corrected_detail.setReadOnly(True)
+        for title, widget in (("原字幕（含时间戳）", self.original_detail),
+                              ("逐句差异（红字为改动）", self.diff_detail),
+                              ("校对后字幕（时间不变）", self.corrected_detail)):
+            panel = QWidget(); panel_layout = QVBoxLayout(panel)
+            panel_layout.addWidget(QLabel(title)); panel_layout.addWidget(widget)
+            details.addWidget(panel)
+        details.setMinimumHeight(170)
+        layout.addWidget(details)
+        self.table.currentCellChanged.connect(lambda row, *_: self.show_details(row))
+        paste_row = QHBoxLayout()
+        self.paste_mode = QComboBox()
+        self.paste_mode.addItem("一列文案：从选中行顺序填入", "order")
+        self.paste_mode.addItem("两列：文件名（含扩展名）＋文案", "name")
+        paste_button = QPushButton("从谷歌表格 / Excel 批量粘贴")
+        paste_button.clicked.connect(self.paste_scripts)
+        paste_button.setToolTip("在表格复制多行后点击。支持单元格内换行；只填写文案，不直接替换字幕。")
+        paste_row.addWidget(self.paste_mode); paste_row.addWidget(paste_button)
+        layout.addLayout(paste_row)
+        selection_actions = QHBoxLayout()
+        self.select_all_btn = QPushButton("全选可替换项")
+        self.select_all_btn.setToolTip("只勾选已完成对比、文案未再次修改的项目；请先核对差异")
+        self.select_all_btn.clicked.connect(lambda: self.select_results(True))
+        self.clear_selection_btn = QPushButton("取消全选")
+        self.clear_selection_btn.clicked.connect(lambda: self.select_results(False))
+        self.selection_summary = QLabel()
+        selection_actions.addWidget(self.select_all_btn)
+        selection_actions.addWidget(self.clear_selection_btn)
+        selection_actions.addWidget(self.selection_summary, 1)
+        layout.addLayout(selection_actions)
+        self.table.itemChanged.connect(lambda *_: self.update_selection_summary())
+        self.update_selection_summary()
         actions = QHBoxLayout()
         for name, callback in (("导入同名 TXT", self.import_scripts), ("自动对比全部", self.compare_all),
-                               ("替换勾选项", self.apply_checked), ("取消", self.reject)):
+                               ("批量替换勾选项", self.apply_checked), ("取消", self.reject)):
             button = QPushButton(name)
             button.clicked.connect(callback)
             actions.addWidget(button)
         layout.addLayout(actions)
+        if rows:
+            self.table.setCurrentCell(0, 1)
+
+    def select_results(self, checked):
+        self.table.blockSignals(True)
+        try:
+            for index in range(len(self.rows)):
+                state = Qt.CheckState.Checked if checked and index in self.results else Qt.CheckState.Unchecked
+                self.table.item(index, 0).setCheckState(state)
+        finally:
+            self.table.blockSignals(False)
+        self.update_selection_summary()
+
+    def update_selection_summary(self):
+        selected = sum(self.table.item(i, 0).checkState() == Qt.CheckState.Checked for i in self.results)
+        self.selection_summary.setText(f"已对比 {len(self.results)}/{len(self.rows)} 项 · 已勾选 {selected} 项")
+        self.select_all_btn.setEnabled(bool(self.results))
+
+    def show_details(self, row):
+        if row < 0 or row >= len(self.rows):
+            return
+        self.detail_title.setText(f"第 {row + 1} 项：{Path(self.rows[row]['path']).name}")
+        self.original_detail.setPlainText(self.rows[row]["srt"])
+        result = self.results.get(row)
+        self.corrected_detail.setPlainText(result["corrected"] if result else "请填写文案后点击自动对比全部")
+        self.diff_detail.setHtml(self.table.cellWidget(row, 3).toHtml() if result else "尚未对比或文案已修改，请重新对比。")
+
+    def paste_scripts(self):
+        try:
+            assignments = batch_script_paste_assignments(
+                QApplication.clipboard().text(), self.rows, self.paste_mode.currentData(),
+                max(0, self.table.currentRow()))
+        except Exception as exc:
+            QMessageBox.warning(self, "无法批量粘贴", str(exc))
+            return
+        names = "\n".join(f"第 {i + 1} 项：{Path(self.rows[i]['path']).name}" for i, _ in assignments[:8])
+        if QMessageBox.question(self, "确认文案对应关系",
+                f"将填写 {len(assignments)} 个视频的文案（覆盖这些行已有文案，尚不替换字幕）：\n{names}\n"
+                "请确认表格行序/文件名对应正确，填写后点击自动对比全部。") != QMessageBox.StandardButton.Yes:
+            return
+        for index, script in assignments:
+            self.table.cellWidget(index, 2).setPlainText(script)
+        self.show_details(self.table.currentRow())
 
     def invalidate(self, row):
         self.results.pop(row, None)
+        self.table.cellWidget(row, 3).clear()
         self.table.item(row, 0).setCheckState(Qt.CheckState.Unchecked)
         if self.table.item(row, 4):
             self.table.item(row, 4).setText("需要重新对比")
+        if hasattr(self, "diff_detail") and self.table.currentRow() == row:
+            self.show_details(row)
 
     def import_scripts(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "选择与视频同名的 UTF-8 文案", "", "文案 (*.txt)")
@@ -6779,11 +6903,15 @@ class BatchScriptProofreadDialog(QDialog):
             corrected, changes = proofread_srt_keep_timestamps(row["srt"], script)
             words = align_word_srt_to_phrase_srt(row["words"], corrected, row["srt"])
             self.results[index] = dict(row, corrected=corrected, corrected_words=words, changes=changes)
-            before = " ".join(t for _, _, t in parse_srt(row["srt"]))
-            after = " ".join(t for _, _, t in parse_srt(corrected))
-            self.table.cellWidget(index, 3).setHtml(html_word_diff(before, after))
+            import html
+            parts = []
+            for change in changes:
+                parts.append(f"<p><b>#{change['index']}　{_srt_stamp(change['start'])} → {_srt_stamp(change['end'])}</b><br>"
+                             f"原文：{html.escape(change['old'])}<br>校对：{html_word_diff(change['old'], change['new'])}</p>")
+            self.table.cellWidget(index, 3).setHtml("".join(parts) or "文字一致，无需修改")
             self.table.item(index, 4).setText(f"{len(changes)} 处改动；需核对估时" if changes else "文字一致")
             self.table.item(index, 0).setCheckState(Qt.CheckState.Unchecked)
+        self.show_details(self.table.currentRow())
 
     def apply_checked(self):
         self.selected_results = [result for i, result in self.results.items()
@@ -11056,6 +11184,7 @@ class DynamicCaptionPage(QWidget):
                 self.group_auto_timeline.blockSignals(False)
 
     def _group_merge_item_done(self, output, group_name, index, total):
+        self._set_caption_task_status(output, "待提取（已重新合成）")
         if output not in self.group_merge_outputs:
             self.group_merge_outputs.append(output)
         session = getattr(self, "_group_merge_session_outputs", None)
@@ -11493,6 +11622,22 @@ class DynamicCaptionPage(QWidget):
         if hasattr(self, "videos") and widget is self.videos:
             self._refresh_rename_title_match_table()
 
+    def _set_caption_task_status(self, source, status):
+        if not source:
+            return
+        if not hasattr(self, "_caption_task_status"):
+            self._caption_task_status = {}
+        self._caption_task_status[self._timeline_key(source)] = status
+        for video in self._videos_using_caption_source(source):
+            self._caption_task_status[self._timeline_key(video)] = status
+        self._refresh_task_queue()
+
+    def _finish_caption_task_statuses(self):
+        for key, status in list(getattr(self, "_caption_task_status", {}).items()):
+            if status in ("排队识别", "正在识别…"):
+                self._caption_task_status[key] = "识别未完成，请重试"
+        self._refresh_task_queue()
+
     def _refresh_task_queue(self):
         if not hasattr(self,"task_queue") or not hasattr(self,"videos"): return
         videos=[self.videos.item(i).text() for i in range(self.videos.count())]
@@ -11517,6 +11662,11 @@ class DynamicCaptionPage(QWidget):
                     or _load_word_sidecar(audio)
                 )
                 text_state = "已提取" if has_caps else "待提取"
+                statuses = getattr(self, "_caption_task_status", {})
+                candidates = [statuses.get(video_key), statuses.get(audio_key)]
+                # A pending/new recognition always takes precedence over old cache.
+                text_state = next((s for s in candidates if s in ("正在识别…", "排队识别")),
+                                  next((s for s in candidates if s), text_state))
             values=(f"{row+1:02d}",video.name,f"{audio.name}（{reason}）",text_state)
             for column,value in enumerate(values):
                 item=QTableWidgetItem(value); item.setToolTip(value); self.task_queue.setItem(row,column,item)
@@ -18298,6 +18448,7 @@ class DynamicCaptionPage(QWidget):
             pass
         self._start_timeline_activity(Path(source).name,2,92)
         self._timeline_pending_source=source
+        self._set_caption_task_status(source, "正在识别…")
         self.timeline_thread=QThread(self); callback=lambda path:self.transcribe_callable(path,provider)
         self.timeline_worker=TimelineWorker(callback,source,self.output.text(),force_refresh=True); self.timeline_worker.moveToThread(self.timeline_thread)
         self.timeline_thread.started.connect(self.timeline_worker.run); self.timeline_worker.finished.connect(self._timeline_done); self.timeline_worker.finished.connect(self.timeline_thread.quit)
@@ -18341,6 +18492,8 @@ class DynamicCaptionPage(QWidget):
         self.timeline_worker.moveToThread(self.timeline_thread)
         self.timeline_thread.started.connect(self.timeline_worker.run)
         self.timeline_worker.item_started.connect(self._batch_timeline_item_started)
+        for source in sources:
+            self._set_caption_task_status(source, "排队识别")
         self.timeline_worker.item_done.connect(self._batch_timeline_item_done)
         self.timeline_worker.item_failed.connect(self._batch_timeline_item_failed)
         self.timeline_worker.finished.connect(self._batch_timeline_done)
@@ -18353,6 +18506,7 @@ class DynamicCaptionPage(QWidget):
         self.timeline_thread.start()
 
     def _batch_timeline_item_started(self,source,index,total):
+        self._set_caption_task_status(source, "正在识别…")
         base=round((index-1)/max(1,total)*100)
         cap=max(base+1,round((index-.08)/max(1,total)*100))
         self._append_run_log(f"[{index}/{total}] 开始识别：{Path(source).name}")
@@ -18573,6 +18727,7 @@ class DynamicCaptionPage(QWidget):
             self.timeline_thread.started.connect(self.timeline_worker.run)
             self.timeline_worker.log.connect(self._append_run_log)
             self.timeline_worker.finished.connect(self._post_cut_asr_done)
+            self._set_caption_task_status(video_path, "正在识别…")
             self.timeline_worker.finished.connect(self.timeline_thread.quit)
             self.timeline_thread.finished.connect(self._post_cut_asr_ended)
             self.timeline_thread.finished.connect(self.timeline_thread.deleteLater)
@@ -18605,6 +18760,7 @@ class DynamicCaptionPage(QWidget):
             pass
         key = str(getattr(self, "_post_cut_asr_target_key", "") or "")
         video_path = str(getattr(self, "_post_cut_asr_video_path", "") or "")
+        self._set_caption_task_status(video_path, "识别失败，请重试")
         try:
             if not ok:
                 self._append_run_log(f"裁剪后重提识别失败：{result}")
@@ -18617,6 +18773,7 @@ class DynamicCaptionPage(QWidget):
             state = dict(self.timeline_edit_states.get(key, {}) or {})
             captured = getattr(self, "_post_cut_asr_input_state", state)
             if captured.get("tracks") != state.get("tracks"):
+                self._set_caption_task_status(video_path, "剪辑已变化，待重提")
                 self._append_run_log("识别期间时间轴已改变：已丢弃旧剪辑的识别结果，请按当前时间轴重新提取。")
                 return
             word_ready, estimated = ensure_word_level_srt(result, phrase_srt)
@@ -18630,6 +18787,7 @@ class DynamicCaptionPage(QWidget):
             if word_aligned:
                 self._caption_map_put(self.timeline_words, key, word_aligned)
             self._caption_map_put(self.timeline_overrides, key, phrase_srt)
+            self._set_caption_task_status(video_path, "已提取" if phrase_srt.strip() else "未识别到字幕")
             if chinese:
                 self._caption_map_put(self.timeline_chinese, key, chinese)
             # 成品时钟：已对齐，预览/导出直接用，不再当源轴重映射
@@ -18670,6 +18828,7 @@ class DynamicCaptionPage(QWidget):
             self._restore_post_cut_asr_buttons()
 
     def _post_cut_asr_ended(self):
+        self._finish_caption_task_statuses()
         self._stop_timeline_activity()
         self.timeline_worker = None
         self.timeline_thread = None
@@ -18755,6 +18914,7 @@ class DynamicCaptionPage(QWidget):
         phrase_srt,fixes=self._group_words_for_current_layout(srt,True)
         phrase_srt = filter_asr_junk_srt(phrase_srt)
         stored_keys = self._store_extracted_timeline(source, srt, phrase_srt, chinese)
+        self._set_caption_task_status(source, "已提取" if phrase_srt.strip() else "未识别到字幕")
         self.extract_all_btn.setText("正在识别中…")
         cue_count = max(0, str(srt or "").count("-->"))
         bind_note = ""
@@ -18792,6 +18952,7 @@ class DynamicCaptionPage(QWidget):
         self._refresh_task_queue()
 
     def _batch_timeline_item_failed(self,source,message,index,total):
+        self._set_caption_task_status(source, "识别失败，请重试")
         self._stop_timeline_activity(round(index/max(1,total)*100))
         text=f"[{index}/{total}] 字幕识别失败，已跳过并继续下一项：{Path(source).name}｜{message}"
         self._append_run_log(text)
@@ -18835,6 +18996,7 @@ class DynamicCaptionPage(QWidget):
             self.run_status.setText("当前状态：字幕队列全部失败，请在“帮助 → 软件日志”查看原因")
 
     def _timeline_done(self,ok,result,chinese=""):
+        self._set_caption_task_status(self._timeline_pending_source, "识别失败，请重试")
         self._stop_timeline_activity(100 if ok else self.progress.value())
         self.extract_timeline_btn.setEnabled(True); self.extract_timeline_btn.setText("重新提取")
         if ok:
@@ -18843,6 +19005,7 @@ class DynamicCaptionPage(QWidget):
             phrase_srt = filter_asr_junk_srt(phrase_srt)
             if source:
                 self._store_extracted_timeline(source, result, phrase_srt, chinese)
+                self._set_caption_task_status(source, "已提取" if phrase_srt.strip() else "未识别到字幕")
                 cue_count = max(0, str(result or "").count("-->"))
                 # 显示实际落地的识别服务（自动模式下不等于下拉框所选）
                 asr_note = ""
@@ -18865,10 +19028,11 @@ class DynamicCaptionPage(QWidget):
                         f"⚠ 识别结果偏少（{cue_count} 条）：{preview or '无正文'}。"
                         " 该片口播为希腊语时，请把「书写语言」选为 Ελληνικά 希腊语 后再次「重新提取」。"
                     )
-                # 单片提取：刷新当前编辑器为该片结果
-                self._loading_timeline=True
-                try: self.override_text.setPlainText(phrase_srt)
-                finally: self._loading_timeline=False
+                # Switching tasks while ASR runs must not display another video's text.
+                if self._timeline_key(self._timeline_source()) == self._timeline_key(source):
+                    self._loading_timeline=True
+                    try: self.override_text.setPlainText(phrase_srt)
+                    finally: self._loading_timeline=False
                 self._live_timeline_cache_key = None
                 self._invalidate_preview_caption_overlay()
             self.log.appendPlainText("已重新识别并覆盖旧时间轴；词级时间轴已保留，编辑器已合并为逐句字幕。")
@@ -18879,6 +19043,7 @@ class DynamicCaptionPage(QWidget):
             self.run_status.setText("当前状态：当前字幕识别失败；错误已记录，可调整服务后重试")
 
     def _timeline_ended(self):
+        self._finish_caption_task_statuses()
         self._stop_timeline_activity()
         self.timeline_worker=None; self.timeline_thread=None; self._timeline_pending_source=""
         if hasattr(self,"extract_timeline_btn"): self.extract_timeline_btn.setEnabled(True)
@@ -19720,6 +19885,7 @@ class DynamicCaptionPage(QWidget):
         try: ffmpeg = self.find_ffmpeg()
         except Exception as exc: QMessageBox.critical(self, "缺少组件", str(exc)); return
         settings = self._current_settings(); self.generated_records = []; self._batch_expected_count=len(videos)
+        self._export_queue_snapshot = {self._timeline_key(path): _media_signature(path) for path in videos}
         # 只有 00_分组合成 中的全部中间视频都进入本次渲染队列，
         # 才在全部最终成品成功后删除目录，避免误删未处理的组。
         group_dir=(Path(self.output.text()).expanduser()/"00_分组合成").resolve()
@@ -19786,6 +19952,7 @@ class DynamicCaptionPage(QWidget):
             and all(path.is_file() and path.stat().st_size > 1024 for path in completed_products)
         )
         if all_products_ready:
+            self._remove_successfully_exported_queue()
             cleanup = cleanup_successful_render_artifacts(
                 self.output.text(), completed_products
             )
@@ -19805,6 +19972,40 @@ class DynamicCaptionPage(QWidget):
                 "本批存在失败或缺失成品，已保留缓存与 JSON 供断点续接。"
             )
         (QMessageBox.information if ok else QMessageBox.critical)(self, "动态文案" if ok else "生成失败", message)
+
+    def _remove_successfully_exported_queue(self):
+        snapshot = getattr(self, "_export_queue_snapshot", {})
+        removed = set()
+        self.videos.blockSignals(True)
+        try:
+            for index in range(self.videos.count() - 1, -1, -1):
+                path = self.videos.item(index).text()
+                key = self._timeline_key(path)
+                try:
+                    unchanged = not Path(path).exists() or _media_signature(path) == snapshot.get(key)
+                except OSError:
+                    unchanged = False
+                if key in snapshot and unchanged:
+                    self.videos.takeItem(index)
+                    removed.add(key)
+        finally:
+            self.videos.blockSignals(False)
+        self._export_queue_snapshot = {}
+        if self._timeline_key(getattr(self, "_active_caption_video_path", "")) in removed or not self.videos.count():
+            self._clear_previews_and_releases()
+            self._active_caption_video_path = ""
+            self._active_timeline_source = ""
+            self._loading_timeline = True
+            try:
+                self.override_text.clear()
+                self.canva_timeline.set_project("", 0, "")
+            finally:
+                self._loading_timeline = False
+            if self.videos.count():
+                self.videos.setCurrentRow(-1)
+                self.videos.setCurrentRow(0)
+        self._refresh_task_queue()
+        self._append_run_log(f"导出成功，已从视频字幕列表移除 {len(removed)} 个任务；原素材与成品文件保留。")
 
     def _cleanup_completed_group_intermediates(self, ok):
         folder=self._pending_group_cleanup_dir

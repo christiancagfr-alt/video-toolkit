@@ -75,6 +75,26 @@ jobs:
           if (-not $runtime) { throw 'ONNX Runtime was not bundled for local Whisper VAD.' }
           Write-Host "Bundled ONNX Runtime: $($runtime.FullName)"
 
+      - name: Verify packaged Windows startup
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:VIDEO_TOOLKIT_SMOKE_TEST = '1'
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'videotoolkit-smoke-profile'
+          $env:VIDEO_TOOLKIT_STARTUP_TRACE = Join-Path $env:RUNNER_TEMP 'videotoolkit-startup.txt'
+          $appPath = (Resolve-Path 'dist_folder\VideoToolkit\VideoToolkit.exe').Path
+          $smokeProcess = Start-Process -FilePath $appPath -WindowStyle Hidden -PassThru
+          if (-not $smokeProcess.WaitForExit(120000)) {
+            Stop-Process -Id $smokeProcess.Id -ErrorAction SilentlyContinue
+            if (Test-Path $env:VIDEO_TOOLKIT_STARTUP_TRACE) { Get-Content $env:VIDEO_TOOLKIT_STARTUP_TRACE }
+            throw 'Packaged application startup timed out.'
+          }
+          $trace = Get-Content $env:VIDEO_TOOLKIT_STARTUP_TRACE -Raw
+          Write-Host $trace
+          if ($smokeProcess.ExitCode -ne 0 -or $trace -notmatch 'window shown') {
+            throw "Packaged startup failed: $($smokeProcess.ExitCode)"
+          }
+
       - name: Package final artifact
         shell: pwsh
         run: |
