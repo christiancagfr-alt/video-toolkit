@@ -12,10 +12,11 @@ from PySide6.QtCore import QThread, QUrl, Signal, Qt
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
+    QCheckBox, QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QMessageBox, QProgressBar, QPushButton,
     QSpinBox, QSlider, QVBoxLayout,
 )
+from .path_picker import VIDEO_EXTENSIONS, collect_files
 from .settings_page import hidden_kwargs
 
 
@@ -150,6 +151,8 @@ class StackWorker(QThread):
 
 class VerticalStackDialog(QDialog):
     caption_sources_ready = Signal(list)
+    # top_paths, bottom_paths, settings, for_captions — 父页面先 Reels 合成再回传成品路径拼接
+    synth_then_stack_requested = Signal(list, list, dict, bool)
 
     def __init__(self, ffmpeg, output, parent=None):
         super().__init__(parent)
@@ -162,7 +165,13 @@ class VerticalStackDialog(QDialog):
             available = self.screen().availableGeometry()
             self.resize(min(840, available.width() - 60), min(720, available.height() - 80))
         root = QVBoxLayout(self)
-        tip = QLabel("上下画面同时播放｜参考比例：上 64% / 下 36%\n批量：数量相同按列表顺序配对；任一侧只有一个视频时复用。短视频循环到目标时长。")
+        tip = QLabel(
+            "上下画面同时播放｜参考比例：上 64% / 下 36%\n"
+            "支持「视频文件」或「文件夹」（自动展开其中的视频）。\n"
+            "批量：数量相同按列表顺序配对；任一侧只有一个则复用。\n"
+            "若勾选「先 Reels 合成」：文件夹/源片会先出带字幕成品，再上下拼；"
+            "上方成品字幕会落在上半画面。"
+        )
         tip.setWordWrap(True)
         root.addWidget(tip)
         lists = QHBoxLayout()
@@ -172,15 +181,29 @@ class VerticalStackDialog(QDialog):
             layout = QVBoxLayout(group)
             view = QListWidget()
             view.setDragDropMode(QListWidget.DragDropMode.InternalMove)
-            view.setToolTip("可拖动列表条目调整配对顺序。")
+            view.setToolTip("可拖动列表条目调整配对顺序。支持文件或文件夹路径。")
             layout.addWidget(view)
             actions = QHBoxLayout()
-            add, remove = QPushButton("添加视频"), QPushButton("移除选中")
+            add = QPushButton("添加视频")
+            add_folder = QPushButton("添加文件夹")
+            remove = QPushButton("移除选中")
             add.clicked.connect(lambda checked=False, target=view: self.add_files(target))
+            add_folder.clicked.connect(lambda checked=False, target=view: self.add_folder(target))
             remove.clicked.connect(lambda checked=False, target=view: target.takeItem(target.currentRow()))
-            actions.addWidget(add); actions.addWidget(remove)
-            layout.addLayout(actions); lists.addWidget(group); self.inputs.append(view)
+            actions.addWidget(add)
+            actions.addWidget(add_folder)
+            actions.addWidget(remove)
+            layout.addLayout(actions)
+            lists.addWidget(group)
+            self.inputs.append(view)
         root.addLayout(lists, 1)
+        self.synth_first = QCheckBox("源素材/文件夹：先走 Reels 合成（带字幕）再上下拼接")
+        self.synth_first.setToolTip(
+            "勾选后：列表里的源视频会先按 Reels 批量导出成带字幕成品，"
+            "再按配对做上下拼接。上方成品字幕会出现在上半画面。"
+            "若两侧已是成品，可取消勾选直接拼。"
+        )
+        root.addWidget(self.synth_first)
         options = QGridLayout()
         self.ratio = QSpinBox(); self.ratio.setRange(10, 90); self.ratio.setValue(64); self.ratio.setSuffix(" %")
         self.fit = QComboBox()
@@ -240,25 +263,75 @@ class VerticalStackDialog(QDialog):
         for button in (self.preview_btn, self.caption_btn, self.export_btn, self.stop_btn): buttons.addWidget(button)
         root.addLayout(buttons)
 
+    def _list_paths(self, view):
+        """展开列表中的文件与文件夹为视频路径。"""
+        raw = [view.item(i).text() for i in range(view.count())]
+        return collect_files(raw, VIDEO_EXTENSIONS)
+
     def add_files(self, target):
         paths, _ = QFileDialog.getOpenFileNames(self, "添加视频", "", "视频 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v)")
         for path in paths:
             target.addItem(path)
             target.item(target.count() - 1).setToolTip(path)
 
+    def add_folder(self, target):
+        folder = QFileDialog.getExistingDirectory(self, "添加视频文件夹")
+        if not folder:
+            return
+        found = collect_files([folder], VIDEO_EXTENSIONS)
+        if not found:
+            QMessageBox.information(self, "没有视频", f"文件夹内未找到视频：\n{folder}")
+            return
+        # 列表里保留文件夹路径，导出时再展开（便于查看来源）
+        target.addItem(folder)
+        target.item(target.count() - 1).setToolTip(f"{folder}\n（含 {len(found)} 个视频）")
+        self.status.setText(f"已添加文件夹（{len(found)} 个视频）：{Path(folder).name}")
+
     def choose_output(self):
         selected = QFileDialog.getExistingDirectory(self, "选择输出目录", self.output.text())
         if selected: self.output.setText(selected)
 
+    def start_with_resolved_pairs(self, pairs, settings, preview=False, for_captions=False):
+        """父页面合成完成后，用成品路径直接拼接。"""
+        if self.worker and self.worker.isRunning():
+            return
+        if not pairs:
+            QMessageBox.warning(self, "检查素材", "没有可拼接的配对。")
+            return
+        self.player.stop()
+        self.preview_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        self.caption_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.progress.setValue(0)
+        destination = self.preview_dir.name if preview else self.output.text().strip()
+        if for_captions:
+            destination = Path(destination) / "上下拼接素材"
+        self.status.setText(f"开始拼接 {len(pairs)} 组成品…")
+        self.worker = StackWorker(
+            self.ffmpeg, pairs[:1] if preview else pairs, destination, settings, preview, self,
+        )
+        self.worker.progress.connect(self.update_progress)
+        self.worker.completed.connect(lambda products, error: self.done_job(products, error, preview, for_captions))
+        self.worker.finished.connect(self.job_finished)
+        self.worker.start()
+
     def start(self, preview, for_captions=False):
         if self.worker and self.worker.isRunning(): return
         try:
-            pairs = make_pairs(*[[view.item(i).text() for i in range(view.count())] for view in self.inputs])
+            top = self._list_paths(self.inputs[0])
+            bottom = self._list_paths(self.inputs[1])
+            pairs = make_pairs(top, bottom)
             if not preview and not self.output.text().strip(): raise ValueError("请选择输出目录。")
         except ValueError as exc:
             QMessageBox.warning(self, "检查素材", str(exc)); return
         settings = dict(ratio=self.ratio.value(), fit=self.fit.currentData(), audio=self.audio.currentData(), duration=self.duration.currentData())
         settings.update({key: spin.value() for key, spin in self.crop_positions.items()})
+        # 先合成再拼接：交给 Reels 父页面
+        if (not preview) and self.synth_first.isChecked():
+            self.status.setText("已请求 Reels 先合成上下素材（带字幕），完成后再拼接…")
+            self.synth_then_stack_requested.emit(top, bottom, settings, bool(for_captions))
+            return
         self.player.stop()
         self.preview_btn.setEnabled(False); self.export_btn.setEnabled(False); self.caption_btn.setEnabled(False); self.stop_btn.setEnabled(True)
         self.progress.setValue(0)

@@ -310,7 +310,11 @@ def paint_caption_overlay_image(
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
     try:
-        if preset.get("effect") == "three_bands":
+        from .caption_rich import paint_rich_caption
+        rich_cut = 0 if settings.get("caption_mode") == "自由文案动画（不对口型）" else cut
+        if paint_rich_caption(painter, text, settings, rich_cut, tokens):
+            pass
+        elif preset.get("effect") == "three_bands":
             paint_three_bands(painter, text, settings)
         elif effect in SEMANTIC_LAYOUT_EFFECTS:
             _paint_semantic(

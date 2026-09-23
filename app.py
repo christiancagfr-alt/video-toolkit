@@ -79,7 +79,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.63").strip().lstrip("v") or "1.7.63"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.64").strip().lstrip("v") or "1.7.64"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 _SINGLE_INSTANCE_MUTEX = None
 ALL_RESULTS_LABEL = "【全部结果】"
@@ -102,9 +102,10 @@ DEFAULT_MODELS = {
 }
 # 本地 Whisper 可选体积（faster-whisper 模型名）
 LOCAL_WHISPER_MODEL_OPTIONS = [
-    ("small", "small · 快 / 准确度中上"),
-    ("medium", "medium · 推荐（语义更稳）"),
-    ("large-v3", "large-v3 · 最准 / 更慢更吃显存"),
+    ("base", "base · 最快（口型可用，语义略弱）"),
+    ("small", "small · 快 / 准确度中上（推荐提速）"),
+    ("medium", "medium · 语义更稳 / 更慢"),
+    ("large-v3", "large-v3 · 最准 / 很慢很吃显存"),
 ]
 # 自动模式下的服务优先级：Groq 快 → Gemini → Gladia → 本地 → 其它
 DEFAULT_PROVIDER_PRIORITY = [
@@ -1266,12 +1267,15 @@ class TranscribeWorker(QObject):
                     f"（首次使用会下载；medium/large 在 CPU 上可能需数分钟，并非卡死）…"
                 )
                 has_cuda = ctranslate2.get_cuda_device_count() > 0
+                # CPU 多线程；small 用 int8 更快。不影响词级时间戳准确度的前提下提速加载。
+                cpu_threads = max(2, min(16, (os.cpu_count() or 4)))
                 try:
                     self._local_model = WhisperModel(
                         model_name,
                         device="cuda" if has_cuda else "cpu",
-                        compute_type="auto" if has_cuda else "int8",
-                        cpu_threads=max(1, min(8, os.cpu_count() or 4)),
+                        compute_type="float16" if has_cuda else "int8",
+                        cpu_threads=cpu_threads,
+                        num_workers=1,
                     )
                     self._local_device = "cuda" if has_cuda else "cpu"
                     self._local_model_name = model_name
@@ -1281,7 +1285,7 @@ class TranscribeWorker(QObject):
                     _emit(f"当前 GPU 模式不可用，自动切换 CPU INT8：{exc}")
                     self._local_model = WhisperModel(
                         model_name, device="cpu", compute_type="int8",
-                        cpu_threads=max(1, min(8, os.cpu_count() or 4)),
+                        cpu_threads=cpu_threads, num_workers=1,
                     )
                     self._local_device = "cpu"
                     self._local_model_name = model_name
@@ -1346,15 +1350,29 @@ class TranscribeWorker(QObject):
             if use_vad is None:
                 use_vad = vad_default
             try:
-                # CPU 用更小 beam，显著提速；GPU 可略高
+                # 提速关键：beam=1 + best_of=1（对口型词级时间戳影响很小，CPU 可快数倍）
+                # small/medium 都默认 beam1；仅 large-v3 在 GPU 上用 beam2
                 if beam_size is None:
-                    beam_size = 3 if self._local_device == "cuda" else 2
+                    name = str(getattr(self, "_local_model_name", "") or "").lower()
+                    if self._local_device == "cuda" and "large" in name:
+                        beam_size = 2
+                    else:
+                        beam_size = 1
                 stream, info = model.transcribe(
-                    str(asr_audio), language=language, beam_size=beam_size,
-                    vad_filter=use_vad, word_timestamps=True,
+                    str(asr_audio),
+                    language=language,
+                    beam_size=beam_size,
+                    best_of=1,
+                    patience=1.0,
+                    temperature=0.0,
+                    vad_filter=use_vad,
+                    word_timestamps=True,
                     condition_on_previous_text=False,
-                    vad_parameters={"min_silence_duration_ms": 400, "speech_pad_ms": 160}
-                    if use_vad else None,
+                    without_speech_threshold=0.6,
+                    vad_parameters={
+                        "min_silence_duration_ms": 350,
+                        "speech_pad_ms": 120,
+                    } if use_vad else None,
                 )
                 return collect_segments(stream, info)
             except RuntimeError as exc:
@@ -1362,8 +1380,8 @@ class TranscribeWorker(QObject):
                     raise
                 _emit("VAD 组件不可用，已关闭静音过滤并自动重试当前视频。")
                 stream, info = model.transcribe(
-                    str(asr_audio), language=language, beam_size=2,
-                    vad_filter=False, word_timestamps=True,
+                    str(asr_audio), language=language, beam_size=1, best_of=1,
+                    temperature=0.0, vad_filter=False, word_timestamps=True,
                     condition_on_previous_text=False,
                 )
                 return collect_segments(stream, info)
@@ -1374,15 +1392,20 @@ class TranscribeWorker(QObject):
                 return False
             n_words = sum(len(s.get("words") or []) for s in segs)
             dur = max(0.5, float(segs[-1].get("end") or 0) - float(segs[0].get("start") or 0))
-            # 约每 1.2s 至少一个词；过稀则认为失败
-            return n_words >= max(3, int(dur / 1.35))
+            # 约每 1.6s 至少一个词；过稀才重跑（避免几乎每次 double 识别拖慢）
+            return n_words >= max(3, int(dur / 1.6))
 
         try:
+            _emit(
+                f"本地识别参数：beam=1、VAD 跳过静音、词级时间戳开启"
+                f"（设备 {self._local_device}，模型 {getattr(self, '_local_model_name', '?')}）"
+            )
             segments, info = transcribe_with(self._local_model)
-            # 第一次结果词级过稀：关 VAD 再跑一遍（常见「第一次对不上、再提才准」）
+            # 仅极端偏稀时重试，避免「小模型也跑两遍」导致体感极慢
             if not _word_density_ok(segments):
-                _emit("本地识别词级偏稀，关闭 VAD 自动重试一次以提高口型对齐…")
-                segments2, info2 = transcribe_with(self._local_model, beam_size=2, use_vad=False)
+                n_words = sum(len(s.get("words") or []) for s in segments)
+                _emit(f"本地识别词级偏稀（{n_words} 词），关闭 VAD 补跑一次…")
+                segments2, info2 = transcribe_with(self._local_model, beam_size=1, use_vad=False)
                 if _word_density_ok(segments2) or len(segments2) >= len(segments):
                     segments, info = segments2, info2
         except RuntimeError as exc:

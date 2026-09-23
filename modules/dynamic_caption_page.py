@@ -444,6 +444,7 @@ CAPTION_RENDERER_VERSION = 26  # Invalidate pre-fix renders: speech clock, blank
 
 # Visual keys that must stay identical between batch snapshot / UI / export.
 _BATCH_STYLE_VISUAL_KEYS = (
+    "rich_caption",
     "text_color", "outline_color", "highlight_color",
     "background_color", "active_text_color", "band_last_background", "preset",
     "font", "font_size", "outline_width", "position",
@@ -5332,11 +5333,25 @@ class CaptionWorker(QObject):
                     # 持续滚动需要逐帧位移，ASS 的 \move 更轻且时间连续；若走 Qt
                     # 静态状态图会既慢又呈阶梯跳动，因此该模式直接使用 ASS。
                     try:
+                        # 长片 Qt 逐状态 PNG 极易卡死/未响应：≥3 分钟直接 ASS（口型时钟仍用词级 SRT）
+                        long_clip = False
+                        try:
+                            long_clip = float(media_duration(self.ffmpeg, render_video) or 0) >= 180.0
+                        except Exception:
+                            long_clip = False
                         if (
-                            video_settings.get("caption_mode") == "自由文案动画（不对口型）"
-                            and video_settings.get("free_animation") == "持续向上滚动"
+                            (
+                                video_settings.get("caption_mode") == "自由文案动画（不对口型）"
+                                and video_settings.get("free_animation") == "持续向上滚动"
+                            )
+                            or long_clip
                         ):
                             video_settings.pop("_qt_caption_pending", None)
+                            if long_clip:
+                                self.log.emit(
+                                    f"[{index + 1}/{len(self.videos)}] 长视频导出：改用 ASS 烧录字幕"
+                                    f"（避免 Qt 逐帧过慢/卡住；词级口型时钟保留）。"
+                                )
                         else:
                             video_settings["_qt_caption_pending"] = True
                             video_settings["_qt_phrase_srt"] = phrase_srt
@@ -5885,6 +5900,8 @@ class CaptionWorker(QObject):
                         )
                         ass_filter = None  # 主路径不用 ASS
                     except Exception as qt_exc:
+                        if render_settings.get("rich_caption", {}).get("rules") or render_settings.get("rich_caption", {}).get("ranges"):
+                            raise RuntimeError(f"局部文字样式渲染失败，已停止此任务，避免回退后丢失样式：{qt_exc}") from qt_exc
                         self.log.emit(
                             f"[{index + 1}/{len(self.videos)}] Qt 字幕烧录失败，回退 ASS：{qt_exc}"
                         )
@@ -9601,6 +9618,10 @@ class DynamicCaptionPage(QWidget):
         self.auto_reextract_after_cut.setText("剪辑后自动重提")
         caption_buttons.addWidget(self.auto_reextract_after_cut, 2, 1, 1, 2)
         caption_tools_layout.addLayout(caption_buttons)
+        assist_button = QPushButton("字幕检查 / 更多工具…")
+        assist_button.setToolTip("字幕校准、局部样式与关键词、双语对齐、相似素材、剪辑工程导出")
+        assist_button.clicked.connect(self._open_editor_assist)
+        caption_tools_layout.addWidget(assist_button)
         self.timeline_timestamp_view=QPlainTextEdit()
         self.timeline_timestamp_view.setReadOnly(False)
         self.timeline_timestamp_view.setMinimumHeight(150)
@@ -11590,15 +11611,22 @@ class DynamicCaptionPage(QWidget):
     def _add(self, widget, paths, extensions):
         existing = {widget.item(i).text() for i in range(widget.count())}
         added = []
-        for path in collect_files(paths, extensions):
+        # 文件夹+大量文件时 collect/add 会堵 UI；分批插入并让出事件循环
+        collected = collect_files(paths, extensions)
+        for i, path in enumerate(collected):
             if path not in existing:
                 widget.addItem(path)
                 existing.add(path)
                 added.append(path)
+            if i and i % 40 == 0:
+                try:
+                    QApplication.processEvents()
+                except Exception:
+                    pass
         if widget.count() and widget.currentRow() < 0: widget.setCurrentRow(0)
         # 换电脑后按文件名把旧字幕/词轴绑到新路径，并尝试加载 *.words.srt
         if hasattr(self, "videos") and widget is self.videos:
-            for path in added:
+            for j, path in enumerate(added):
                 try:
                     self._rebind_caption_maps_for_path(path)
                     word = _load_word_sidecar(path)
@@ -11611,6 +11639,11 @@ class DynamicCaptionPage(QWidget):
                             )
                 except Exception:
                     pass
+                if j and j % 25 == 0:
+                    try:
+                        QApplication.processEvents()
+                    except Exception:
+                        pass
             QTimer.singleShot(0, self._refresh_rename_title_match_table)
         if hasattr(self,"audios") and widget is self.audios and self.videos.currentItem():
             QTimer.singleShot(0,self._rematch_current_video)
@@ -13462,6 +13495,7 @@ class DynamicCaptionPage(QWidget):
         """Return portable visual settings only; media/timelines never enter a template."""
         values=self._style_preferences()
         allowed={
+            "rich_caption",
             "preset","base_preset","effect","font","font_size","caption_mode","free_animation","free_page_seconds",
             "line_length","line_width","letter_spacing","word_spacing","line_spacing","max_words","max_lines",
             "highlight_padding","highlight_padding_y","animation_speed","outline_width","position","margin_v",
@@ -13490,6 +13524,7 @@ class DynamicCaptionPage(QWidget):
 
     def _apply_style_template_data(self,saved):
         if not isinstance(saved,dict): raise ValueError("模板内容不是有效对象")
+        self._rich_caption_config = json.loads(json.dumps(saved.get("rich_caption", {}), ensure_ascii=False))
         previous=self._restoring_style; self._restoring_style=True
         try:
             # 先按内置底预设恢复 effect（语义重点等），再叠自定义颜色/字体
@@ -13756,6 +13791,7 @@ class DynamicCaptionPage(QWidget):
         effect_fields = self._resolved_style_effect_fields()
         preset = effect_fields.get("preset") or "Descript 经典黄"
         prefs = {
+            "rich_caption": json.loads(json.dumps(getattr(self, "_rich_caption_config", {}), ensure_ascii=False)),
             "preset":preset,
             "base_preset": effect_fields.get("base_preset"),
             "effect": effect_fields.get("effect"),
@@ -14073,6 +14109,7 @@ class DynamicCaptionPage(QWidget):
                 pass
 
     def _load_style_preferences_body(self, saved: dict):
+        self._rich_caption_config = json.loads(json.dumps(saved.get("rich_caption", {}), ensure_ascii=False))
         preset=saved.get("preset")
         if preset in ("Reels 白字柔影", "Reels 重点放大"):
             preset = "Reels 语义重点"
@@ -14935,6 +14972,13 @@ class DynamicCaptionPage(QWidget):
         settings=self._live_caption_style_cache["settings"]; preset=self._live_caption_style_cache["preset"]
         text, active_word = self._live_caption_data(seconds); tokens = tokens_for(text)
         if not tokens: return
+        if settings.get("rich_caption"):
+            from .caption_rich import paint_rich_caption
+            rich_cut = self._resolve_karaoke_cut(seconds, tokens, active_word or "")[0]
+            if settings.get("caption_mode") == "自由文案动画（不对口型）":
+                rich_cut = 0
+            if paint_rich_caption(painter, text, settings, rich_cut, tokens):
+                return
         if preset.get("effect") == "three_bands":
             caption_qt_burn.paint_three_bands(painter, text, settings)
             return
@@ -16459,6 +16503,7 @@ class DynamicCaptionPage(QWidget):
         else:
             writing_lang = writing_language_from_ui(self.writing_language.currentText())
         settings = {"preset":preset,
+                "rich_caption": json.loads(json.dumps(getattr(self, "_rich_caption_config", {}), ensure_ascii=False)),
                 "base_preset": effect_fields.get("base_preset") or (preset if preset in PRESETS else None),
                 "effect": effect_fields.get("effect"),
                 "font":self.font.currentText(),"font_size":self.font_size.value(),
@@ -17654,8 +17699,144 @@ class DynamicCaptionPage(QWidget):
             return
         dialog = VerticalStackDialog(ffmpeg, self.output.text().strip(), self)
         dialog.caption_sources_ready.connect(self._add_stacked_caption_sources)
+        dialog.synth_then_stack_requested.connect(self._vertical_stack_synth_then_stack)
+        self._vertical_stack_dialog = dialog
         dialog.exec()
+        self._vertical_stack_dialog = None
         dialog.deleteLater()
+
+    def _vertical_stack_synth_then_stack(self, top_paths, bottom_paths, settings, for_captions=False):
+        """文件夹/源片：先按当前 Reels 设置批量导出（带字幕），再用成品上下拼接。"""
+        from .vertical_stack import make_pairs
+        top = [str(p) for p in (top_paths or []) if p]
+        bottom = [str(p) for p in (bottom_paths or []) if p]
+        try:
+            make_pairs(top, bottom)
+        except ValueError as exc:
+            QMessageBox.warning(self, "上下拼接", str(exc))
+            return
+        unique = list(dict.fromkeys([*top, *bottom]))
+        if not unique:
+            QMessageBox.warning(self, "上下拼接", "没有可合成的视频。")
+            return
+        if getattr(self, "thread", None):
+            try:
+                if self.thread.isRunning():
+                    QMessageBox.information(self, "任务进行中", "请等待当前批量导出结束后再拼接。")
+                    return
+            except RuntimeError:
+                self.thread = None
+        self._add(self.videos, unique, ALLOWED_VIDEO_INPUTS)
+        self._pending_vertical_stack = {
+            "top": top,
+            "bottom": bottom,
+            "settings": dict(settings or {}),
+            "for_captions": bool(for_captions),
+            "sources": unique,
+        }
+        self._append_run_log(
+            f"上下拼接：先对 {len(unique)} 个源视频做 Reels 合成（带字幕），完成后再拼接；"
+            f"上方成品字幕会落在上半画面。"
+        )
+        self._show_source_tool(1)
+        # 仅导出这批源视频（不导出队列里其它无关项）
+        self._run_caption_export_for_videos(unique)
+
+    def _run_caption_export_for_videos(self, video_paths):
+        """对指定视频列表启动 CaptionWorker（复用当前样式/设置）。"""
+        videos = [str(p) for p in (video_paths or []) if p and Path(p).is_file()]
+        if not videos:
+            return
+        try:
+            self._persist_caption_editor_text()
+        except Exception:
+            pass
+        self._clear_previews_and_releases()
+        try:
+            ffmpeg = self._resolve_ffmpeg()
+        except Exception as exc:
+            QMessageBox.critical(self, "缺少组件", str(exc))
+            self._pending_vertical_stack = None
+            return
+        audios = [self.audios.item(i).text() for i in range(self.audios.count())] if hasattr(self, "audios") else []
+        settings = self._current_settings()
+        self.generated_records = []
+        self._batch_expected_count = len(videos)
+        self.progress.setValue(0)
+        self.thread = QThread(self)
+        callback = lambda path: self.transcribe_callable(path, settings["provider"])
+        self.worker = CaptionWorker(videos, audios, self.output.text(), ffmpeg, callback, settings)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.log.connect(self._append_run_log)
+        self.worker.progress.connect(self.progress.setValue)
+        self.worker.result.connect(self._batch_result_ready)
+        self.worker.timeline_ready.connect(self._worker_timeline_ready)
+        self.worker.finished.connect(self.done)
+        self.worker.finished.connect(self.thread.quit)
+        self.thread.finished.connect(self.ended)
+        self.thread.finished.connect(self.thread.deleteLater)
+        if hasattr(self, "start"):
+            self.start.setEnabled(False)
+        if hasattr(self, "stop"):
+            self.stop.setEnabled(True)
+        self.thread.start()
+
+    def _finish_pending_vertical_stack(self, ok: bool):
+        pending = getattr(self, "_pending_vertical_stack", None)
+        if not pending:
+            return
+        self._pending_vertical_stack = None
+        if not ok:
+            QMessageBox.warning(
+                self, "上下拼接中断",
+                "Reels 合成未全部成功，已取消自动上下拼接。请检查日志后重试。",
+            )
+            return
+        sources = list(pending.get("sources") or [])
+        products = [
+            str(item.get("path", ""))
+            for item in (self.generated_records or [])
+            if item.get("path") and Path(item["path"]).is_file()
+        ]
+        if len(products) < len(sources):
+            QMessageBox.warning(
+                self, "上下拼接中断",
+                f"合成成品数量不足（期望 {len(sources)}，实际 {len(products)}），无法自动拼接。",
+            )
+            return
+        # 按导出顺序一一对应源→成品
+        src_to_prod = {src: products[i] for i, src in enumerate(sources) if i < len(products)}
+        top = [src_to_prod.get(p, p) for p in pending.get("top") or []]
+        bottom = [src_to_prod.get(p, p) for p in pending.get("bottom") or []]
+        from .vertical_stack import make_pairs, VerticalStackDialog
+        try:
+            pairs = make_pairs(top, bottom)
+        except ValueError as exc:
+            QMessageBox.warning(self, "上下拼接", str(exc))
+            return
+        self._append_run_log(f"Reels 合成完成，开始上下拼接 {len(pairs)} 组（上方字幕在上半画面）。")
+        try:
+            ffmpeg = self._resolve_ffmpeg()
+        except Exception as exc:
+            QMessageBox.warning(self, "上下拼接", str(exc))
+            return
+        dialog = getattr(self, "_vertical_stack_dialog", None)
+        settings = dict(pending.get("settings") or {})
+        for_captions = bool(pending.get("for_captions"))
+        if dialog is not None:
+            try:
+                dialog.start_with_resolved_pairs(pairs, settings, preview=False, for_captions=for_captions)
+                return
+            except Exception:
+                pass
+        # 对话框已关：单独开一个拼接任务
+        out = self.output.text().strip() or str(Path.home() / "Videos" / "VideoToolkit")
+        fallback = VerticalStackDialog(ffmpeg, out, self)
+        fallback.caption_sources_ready.connect(self._add_stacked_caption_sources)
+        fallback.start_with_resolved_pairs(pairs, settings, preview=False, for_captions=for_captions)
+        fallback.exec()
+        fallback.deleteLater()
 
     def _add_stacked_caption_sources(self, paths):
         """Keep the current queue and add composed audio/video as new caption sources."""
@@ -18079,6 +18260,45 @@ class DynamicCaptionPage(QWidget):
                 or self._group_words_for_current_layout(self.timeline_words.get(key, ""))
             )
         return timeline or ""
+
+    def _open_editor_assist(self):
+        from .editor_assist_dialog import EditorAssistDialog
+        dialog = EditorAssistDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _apply_assist_caption_times(self, video_path, srt, words):
+        """Explicit timing review: persist both clocks without invoking text-only correction."""
+        key = self._timeline_key(video_path)
+        self._ensure_caption_source_snapshot(key)
+        state = self.timeline_edit_states.get(key, {})
+        if state.get("captions_timeline_aligned"):
+            external = self._timeline_key(self._caption_source_for_video(video_path)) != key
+            segments = caption_clock_segments(state, external)
+            source_srt = restore_source_caption_clock(srt, self.timeline_overrides_source.get(key, ""), segments)
+            source_words = restore_source_caption_clock(words, self.timeline_words_source.get(key, ""), segments)
+        else:
+            source_srt, source_words = srt, words
+        self.timeline_overrides[key] = srt
+        self.timeline_words[key] = words
+        self.timeline_overrides_source[key] = source_srt
+        self.timeline_words_source[key] = source_words
+        if key == self._current_video_key():
+            if getattr(self, "_precise_preview_active", False):
+                self._clear_precise_preview()
+            self._loading_timeline = True
+            try:
+                for control in (self.override_text, self.timeline_timestamp_view):
+                    previous = control.blockSignals(True)
+                    control.setPlainText(srt)
+                    control.blockSignals(previous)
+                self.canva_timeline.set_srt(srt)
+            finally:
+                self._loading_timeline = False
+        self._live_timeline_cache_key = None
+        self._invalidate_preview_caption_overlay()
+        self._refresh_live_preview()
+        self._append_run_log(f"已保存人工字幕时间校准：{Path(video_path).name}；词轴同步调整，请试听复核。")
 
     def _open_script_proofread_dialog(self):
         timeline = self._current_timeline_srt_text()
@@ -19924,8 +20144,14 @@ class DynamicCaptionPage(QWidget):
         self.group_merge_start.setEnabled(True); self.group_merge_start.setText("合成"); self.group_merge_stop.setEnabled(False)
         self.run_status.setText("当前状态：已完成" if ok else "当前状态：执行失败，请到“帮助 → 软件日志”查看")
         self._cleanup_completed_group_intermediates(ok)
+        # 上下拼接：合成完成后自动用成品配对拼接
+        try:
+            self._finish_pending_vertical_stack(ok)
+        except Exception as stack_exc:
+            self._append_run_log(f"上下拼接自动续接失败：{stack_exc}")
+            self._pending_vertical_stack = None
         # 一批批量导出结束后清空自定义标题，避免下一批误用上一批文案、重复命名。
-        if ok and hasattr(self, "rename_custom_titles"):
+        if ok and hasattr(self, "rename_custom_titles") and not getattr(self, "_pending_vertical_stack", None):
             previous = self.rename_custom_titles.toPlainText().strip()
             self.rename_custom_titles.clear()
             if previous:

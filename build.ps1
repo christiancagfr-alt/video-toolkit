@@ -13,7 +13,7 @@ if ([string]::IsNullOrWhiteSpace($version)) {
   $versionFile = Join-Path $root 'VERSION'
   if (Test-Path $versionFile) { $version = (Get-Content -Raw -LiteralPath $versionFile).Trim() }
 }
-if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.61' }
+if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.64' }
 $version = $version.Trim().TrimStart('v')
 if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Invalid application version: $version" }
 $versionHook = Join-Path $env:TEMP ("video_toolkit_version_" + [guid]::NewGuid().ToString('N') + '.py')
@@ -48,6 +48,10 @@ python -m PyInstaller --clean --noconfirm --windowed --onedir --contents-directo
   --hidden-import 'yt_dlp' `
   --hidden-import 'modules.caption_qt_burn' `
   --hidden-import 'modules.dynamic_caption_page' `
+  --hidden-import 'modules.vertical_stack' `
+  --hidden-import 'modules.editor_assist' `
+  --hidden-import 'modules.editor_assist_dialog' `
+  --hidden-import 'modules.caption_rich' `
   --collect-submodules 'yt_dlp' `
   --collect-data 'yt_dlp' `
   --runtime-hook $versionHook `
