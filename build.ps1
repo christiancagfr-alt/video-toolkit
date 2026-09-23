@@ -30,7 +30,8 @@ $mediaBin = if ($env:VIDEO_TOOLKIT_MEDIA_BIN) {
 if (-not (Test-Path (Join-Path $mediaBin 'ffmpeg.exe')) -or -not (Test-Path (Join-Path $mediaBin 'ffprobe.exe'))) {
   throw 'FFmpeg and FFprobe were not found. Set VIDEO_TOOLKIT_MEDIA_BIN or place them in tools\ffmpeg\bin.'
 }
-python -m PyInstaller --clean --noconfirm --windowed --onedir --contents-directory 'internal' `
+# 必须用 _internal：PyInstaller 启动器固定查找 _internal\python312.dll
+python -m PyInstaller --clean --noconfirm --windowed --onedir --contents-directory '_internal' `
   --name 'VideoToolkit' `
   --icon (Join-Path $root 'logo.ico') `
   --add-data ((Join-Path $root 'logo.ico') + ';.') `
