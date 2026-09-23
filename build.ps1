@@ -31,7 +31,8 @@ if (-not (Test-Path (Join-Path $mediaBin 'ffmpeg.exe')) -or -not (Test-Path (Joi
   throw 'FFmpeg and FFprobe were not found. Set VIDEO_TOOLKIT_MEDIA_BIN or place them in tools\ffmpeg\bin.'
 }
 # 必须用 _internal：PyInstaller 启动器固定查找 _internal\python312.dll
-python -m PyInstaller --clean --noconfirm --windowed --onedir --contents-directory '_internal' `
+# --noupx：UPX 会弄坏 charset_normalizer 等 Cython/mypyc 扩展，导致启动 ImportError
+python -m PyInstaller --clean --noconfirm --windowed --onedir --noupx --contents-directory '_internal' `
   --name 'VideoToolkit' `
   --icon (Join-Path $root 'logo.ico') `
   --add-data ((Join-Path $root 'logo.ico') + ';.') `
@@ -44,9 +45,14 @@ python -m PyInstaller --clean --noconfirm --windowed --onedir --contents-directo
   --collect-binaries 'ctranslate2' `
   --collect-data 'onnxruntime' `
   --collect-binaries 'onnxruntime' `
+  --collect-all 'charset_normalizer' `
   --hidden-import 'faster_whisper' `
   --hidden-import 'onnxruntime' `
   --hidden-import 'yt_dlp' `
+  --hidden-import 'chardet' `
+  --hidden-import 'charset_normalizer' `
+  --hidden-import 'charset_normalizer.md' `
+  --hidden-import 'charset_normalizer.cd' `
   --hidden-import 'modules.caption_qt_burn' `
   --hidden-import 'modules.dynamic_caption_page' `
   --hidden-import 'modules.vertical_stack' `
