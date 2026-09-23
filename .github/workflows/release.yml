@@ -5,11 +5,20 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build (e.g. v1.7.64). Leave empty to use the selected branch/tag ref.'
+        required: false
+        default: 'v1.7.64'
+        type: string
 
 permissions:
   id-token: write
   contents: write
   attestations: write
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   build-windows:
@@ -18,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -100,7 +111,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path 'dist_final' -Force | Out-Null
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ env.RELEASE_TAG }}"
           $version = $tag.Trim().TrimStart('v')
           if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Invalid version from tag: $tag" }
           # Keep Inno Setup output name in sync with the git tag (avoids Setup_vX vs AppVersion mismatch).
@@ -147,6 +158,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -163,6 +176,8 @@ jobs:
         run: |
           brew install ffmpeg
           echo "VIDEO_TOOLKIT_MEDIA_BIN=$(dirname "$(command -v ffmpeg)")" >> "$GITHUB_ENV"
+          echo "VIDEO_TOOLKIT_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+          echo "${RELEASE_TAG#v}" > VERSION
 
       - name: Create macOS application icon
         run: |
@@ -187,7 +202,7 @@ jobs:
       - name: Set application metadata and sign locally
         run: |
           APP="dist_macos/VideoToolkit.app"
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           /usr/libexec/PlistBuddy -c "Set :CFBundleName 视频工具合集" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 视频工具合集" "$APP/Contents/Info.plist" || \
             /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 视频工具合集" "$APP/Contents/Info.plist"
@@ -220,7 +235,7 @@ jobs:
           mkdir -p dist_final
           ditto -c -k --sequesterRsrc --keepParent \
             "dist_macos/视频工具合集.app" \
-            "dist_final/video-toolkit-macos-${{ matrix.arch }}-${{ github.ref_name }}.zip"
+            "dist_final/video-toolkit-macos-${{ matrix.arch }}-${{ env.RELEASE_TAG }}.zip"
 
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v2
@@ -242,6 +257,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -280,8 +297,8 @@ jobs:
       - name: Point media bin to system FFmpeg
         run: |
           echo "VIDEO_TOOLKIT_MEDIA_BIN=$(dirname "$(command -v ffmpeg)")" >> "$GITHUB_ENV"
-          echo "VIDEO_TOOLKIT_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-          echo "${GITHUB_REF_NAME#v}" > VERSION
+          echo "VIDEO_TOOLKIT_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+          echo "${RELEASE_TAG#v}" > VERSION
 
       - name: Build Linux application
         run: |
@@ -308,7 +325,7 @@ jobs:
       - name: Package final artifact
         run: |
           mkdir -p dist_final
-          TAG="${{ github.ref_name }}"
+          TAG="${{ env.RELEASE_TAG }}"
           (
             cd dist_linux
             zip -r -q "../dist_final/video-toolkit-linux-x64-${TAG}.zip" VideoToolkit
@@ -346,6 +363,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           files: |
             artifacts/*.zip
             artifacts/*.exe
