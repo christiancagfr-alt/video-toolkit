@@ -2,7 +2,12 @@
 
 一站式桌面视频工作台，将批量截图、智能剪辑、Reels 编辑、批量重命名、元数据清理、字幕提取和自动上传填表集中在同一个 PySide6 界面中。
 
-当前版本：**v1.7.64**
+当前版本：**v1.7.65**
+
+### v1.7.65 · 2026-09-23
+
+- **批量/长视频本地识别**：提取后强制刷新预览；≥90s 分段识别；覆盖不足自动补跑；不再误用句级 `.srt`。
+- **安装包启动修复**：禁用 UPX、收集 charset_normalizer/chardet；`_internal` 目录。
 
 ### v1.7.64 · 2026-09-23
 
@@ -90,10 +95,10 @@ BGM/文字配音的切片与时间位置也会合成为独立音轨。分组合�
 
 | 系统 | 安装包 |
 | --- | --- |
-| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.64.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.64/video-toolkit-windows-x64-v1.7.64.zip) · [安装包 Setup](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.64/VideoToolkit_Setup_v1.7.64.exe) |
-| Linux x64 | [video-toolkit-linux-x64-v1.7.64.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.64/video-toolkit-linux-x64-v1.7.64.zip) |
-| macOS Apple Silicon | [video-toolkit-macos-arm64-v1.7.64.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.64/video-toolkit-macos-arm64-v1.7.64.zip) |
-| macOS Intel | [video-toolkit-macos-x64-v1.7.64.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.64/video-toolkit-macos-x64-v1.7.64.zip) |
+| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.65.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.65/video-toolkit-windows-x64-v1.7.65.zip) · [安装包 Setup](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.65/VideoToolkit_Setup_v1.7.65.exe) |
+| Linux x64 | [video-toolkit-linux-x64-v1.7.65.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.65/video-toolkit-linux-x64-v1.7.65.zip) |
+| macOS Apple Silicon | [video-toolkit-macos-arm64-v1.7.65.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.65/video-toolkit-macos-arm64-v1.7.65.zip) |
+| macOS Intel | [video-toolkit-macos-x64-v1.7.65.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.65/video-toolkit-macos-x64-v1.7.65.zip) |
 
 Windows 解压后运行 `VideoToolkit.exe`。Linux 解压后执行 `./run-videotoolkit.sh`（或 `./VideoToolkit`）；若 GUI 起不来可安装 `libxcb-cursor0 libxkbcommon-x11-0 libegl1 libgl1`。macOS 解压后将“视频工具合集.app”拖入“应用程序”；首次运行如被 Gatekeeper 阻止，请在 Finder 中右键应用并选择“打开”。
 

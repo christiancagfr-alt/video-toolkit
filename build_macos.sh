@@ -8,7 +8,7 @@ if [[ -z "$APP_VERSION" ]]; then
   APP_VERSION="$(git -C "$ROOT_DIR" describe --tags --abbrev=0 2>/dev/null || true)"
 fi
 APP_VERSION="${APP_VERSION#v}"
-APP_VERSION="${APP_VERSION:-1.7.64}"
+APP_VERSION="${APP_VERSION:-1.7.65}"
 if [[ ! "$APP_VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
   echo "Invalid application version: $APP_VERSION" >&2
   exit 1

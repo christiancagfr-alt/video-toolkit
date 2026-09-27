@@ -6615,12 +6615,26 @@ class BatchTimelineWorker(QObject):
                             side.unlink(missing_ok=True)
                     except Exception:
                         pass
-                # 强制刷新时不读旁挂 SRT / 磁盘缓存，避免坏结果死循环
-                if (not self.force_refresh) and sidecar.exists() and sidecar.stat().st_size:
-                    srt = sidecar.read_text(encoding="utf-8-sig")
-                elif (not self.force_refresh) and self.cache_dir and _load_timeline_cache(self.cache_dir,path):
-                    srt=_load_timeline_cache(self.cache_dir,path)
-                else:
+                # 强制刷新时不读旁挂 / 缓存。非强制时：优先词级 .words.srt，勿复用同名句级 .srt（易导致口型错）
+                srt = ""
+                chinese = ""
+                if not self.force_refresh:
+                    words_side = _load_word_sidecar(path)
+                    if words_side and _srt_looks_word_level(words_side):
+                        srt = words_side
+                    elif self.cache_dir:
+                        cached = _load_timeline_cache(self.cache_dir, path)
+                        if cached and (_srt_looks_word_level(cached) or cached.count("-->") >= 3):
+                            srt = cached
+                    # 同名 .srt 仅当明显是词级才用；句级导出会和口型对不上
+                    if (not srt) and sidecar.exists() and sidecar.stat().st_size:
+                        try:
+                            cand = sidecar.read_text(encoding="utf-8-sig")
+                            if _srt_looks_word_level(cand):
+                                srt = cand
+                        except Exception:
+                            pass
+                if not srt:
                     _original, chinese, srt = self.callback(path)
                     if self.cache_dir and str(srt or "").strip():
                         _save_timeline_cache(self.cache_dir,path,srt)
@@ -19127,6 +19141,44 @@ class DynamicCaptionPage(QWidget):
             pass
         return keys
 
+    def _refresh_caption_preview_after_extract(self, source: str, phrase_srt: str):
+        """提取完成后强制刷新预览/编辑器，避免仍显示旧词轴（批量长视频常见）。"""
+        # 任意提取完成都清 live cache，防止串片/旧词轴
+        self._live_timeline_cache_key = None
+        source_key = self._timeline_key(source) if source else ""
+        if not source_key:
+            return
+        current_source_key = ""
+        try:
+            current_source_key = self._timeline_key(self._timeline_source()) if self._timeline_source() else ""
+        except Exception:
+            current_source_key = ""
+        video_key = self._current_video_key() if hasattr(self, "_current_video_key") else ""
+        active_video = str(getattr(self, "_active_caption_video_path", "") or "")
+        active_key = self._timeline_key(active_video) if active_video else ""
+        bound_ok = False
+        try:
+            item = self.videos.currentItem() if hasattr(self, "videos") else None
+            if item and self._timeline_key(self._caption_source_for_video(item.text())) == source_key:
+                bound_ok = True
+        except Exception:
+            bound_ok = False
+        if source_key not in (current_source_key, video_key, active_key) and not bound_ok:
+            return
+        self._loading_timeline = True
+        try:
+            if _qt_widget_alive(getattr(self, "override_text", None)):
+                self.override_text.setPlainText(phrase_srt or "")
+            if hasattr(self, "canva_timeline") and hasattr(self.canva_timeline, "set_srt"):
+                try:
+                    self.canva_timeline.set_srt(phrase_srt or "")
+                except Exception:
+                    pass
+        finally:
+            self._loading_timeline = False
+        self._invalidate_preview_caption_overlay()
+        self._refresh_live_preview()
+
     def _batch_timeline_item_done(self,source,srt,chinese,index,total):
         self._stop_timeline_activity(round(index/max(1,total)*100))
         # 去掉 Whisper 幻觉水印（如「Υπότιτλοι AUTHORWAVE」），视频里并无此声
@@ -19160,15 +19212,12 @@ class DynamicCaptionPage(QWidget):
                 " 若口播更长：书写语言选对（如希腊语）后点「重新提取」。"
             )
         if fixes: self._append_run_log(f"[{index}/{total}] 已自动修正 {fixes} 处逐句字幕时间重叠。")
-        # 仅当编辑器当前绑定的就是这条源/视频时才刷新界面，避免批量过程中把别的片冲掉
-        current_source_key = self._timeline_key(self._timeline_source()) if self._timeline_source() else ""
-        active_video = str(getattr(self, "_active_caption_video_path", "") or "")
-        active_key = self._timeline_key(active_video) if active_video else ""
-        source_key = self._timeline_key(source)
-        if source_key and source_key in (current_source_key, active_key):
-            self._loading_timeline=True
-            try: self.override_text.setPlainText(phrase_srt)
-            finally: self._loading_timeline=False
+        # 关键：必须清掉 live cache 并刷新预览，否则仍显示旧词轴（看起来像「要再提取一次」）
+        try:
+            self._refresh_caption_preview_after_extract(source, phrase_srt)
+        except Exception as refresh_exc:
+            self._append_run_log(f"[{index}/{total}] 预览刷新警告：{refresh_exc}")
+            self._live_timeline_cache_key = None
         self._refresh_task_queue()
 
     def _batch_timeline_item_failed(self,source,message,index,total):
@@ -19249,12 +19298,15 @@ class DynamicCaptionPage(QWidget):
                         " 该片口播为希腊语时，请把「书写语言」选为 Ελληνικά 希腊语 后再次「重新提取」。"
                     )
                 # Switching tasks while ASR runs must not display another video's text.
-                if self._timeline_key(self._timeline_source()) == self._timeline_key(source):
-                    self._loading_timeline=True
-                    try: self.override_text.setPlainText(phrase_srt)
-                    finally: self._loading_timeline=False
-                self._live_timeline_cache_key = None
-                self._invalidate_preview_caption_overlay()
+                try:
+                    self._refresh_caption_preview_after_extract(source, phrase_srt)
+                except Exception:
+                    if self._timeline_key(self._timeline_source()) == self._timeline_key(source):
+                        self._loading_timeline=True
+                        try: self.override_text.setPlainText(phrase_srt)
+                        finally: self._loading_timeline=False
+                    self._live_timeline_cache_key = None
+                    self._invalidate_preview_caption_overlay()
             self.log.appendPlainText("已重新识别并覆盖旧时间轴；词级时间轴已保留，编辑器已合并为逐句字幕。")
             if fixes: self._append_run_log(f"已自动修正 {fixes} 处逐句字幕时间重叠。")
             self._refresh_task_queue()

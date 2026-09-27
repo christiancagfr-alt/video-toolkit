@@ -79,7 +79,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.64").strip().lstrip("v") or "1.7.64"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.65").strip().lstrip("v") or "1.7.65"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 _SINGLE_INSTANCE_MUTEX = None
 ALL_RESULTS_LABEL = "【全部结果】"
@@ -1325,21 +1325,37 @@ class TranscribeWorker(QObject):
             _emit(f"16k 抽取异常，回退源文件：{prep_exc}")
             prep_wav = None
 
-        _emit(f"开始本地识别：{asr_audio.name} …")
+        audio_dur = 0.0
+        try:
+            audio_dur = float(video_duration(self.ffmpeg_path, str(asr_audio)) or 0)
+        except Exception:
+            audio_dur = 0.0
+        _emit(f"开始本地识别：{asr_audio.name}（约 {audio_dur:.0f}s）…")
 
-        def collect_segments(stream, info):
+        def collect_segments(stream, info, *, offset=0.0, label=""):
             segments = []
             for item in stream:
                 if self.cancelled:
                     raise RuntimeError("任务已取消")
-                words = [{"start": word.start, "end": word.end, "text": word.word.strip()}
-                         for word in (getattr(item, "words", None) or []) if word.word.strip()]
-                segments.append({"start": item.start, "end": item.end, "text": item.text.strip(), "words": words})
+                words = [
+                    {
+                        "start": float(word.start) + offset,
+                        "end": float(word.end) + offset,
+                        "text": word.word.strip(),
+                    }
+                    for word in (getattr(item, "words", None) or []) if word.word.strip()
+                ]
+                segments.append({
+                    "start": float(item.start) + offset,
+                    "end": float(item.end) + offset,
+                    "text": item.text.strip(),
+                    "words": words,
+                })
                 if len(segments) % 5 == 0 or len(segments) == 1:
-                    _emit(f"本地识别中：已生成 {len(segments)} 条字幕 …")
+                    _emit(f"本地识别中{label}：已生成 {len(segments)} 条字幕 …")
             return segments, info
 
-        def transcribe_with(model, *, beam_size=None, use_vad=None):
+        def transcribe_file(model, path, *, offset=0.0, beam_size=None, use_vad=None, label=""):
             try:
                 import onnxruntime  # noqa: F401
                 vad_default = True
@@ -1349,17 +1365,15 @@ class TranscribeWorker(QObject):
                     _emit("未检测到 ONNX Runtime，已自动关闭 VAD 静音过滤并继续识别。")
             if use_vad is None:
                 use_vad = vad_default
+            if beam_size is None:
+                name = str(getattr(self, "_local_model_name", "") or "").lower()
+                if self._local_device == "cuda" and "large" in name:
+                    beam_size = 2
+                else:
+                    beam_size = 1
             try:
-                # 提速关键：beam=1 + best_of=1（对口型词级时间戳影响很小，CPU 可快数倍）
-                # small/medium 都默认 beam1；仅 large-v3 在 GPU 上用 beam2
-                if beam_size is None:
-                    name = str(getattr(self, "_local_model_name", "") or "").lower()
-                    if self._local_device == "cuda" and "large" in name:
-                        beam_size = 2
-                    else:
-                        beam_size = 1
                 stream, info = model.transcribe(
-                    str(asr_audio),
+                    str(path),
                     language=language,
                     beam_size=beam_size,
                     best_of=1,
@@ -1374,39 +1388,111 @@ class TranscribeWorker(QObject):
                         "speech_pad_ms": 120,
                     } if use_vad else None,
                 )
-                return collect_segments(stream, info)
+                return collect_segments(stream, info, offset=offset, label=label)
             except RuntimeError as exc:
                 if not use_vad or "onnxruntime" not in str(exc).lower():
                     raise
-                _emit("VAD 组件不可用，已关闭静音过滤并自动重试当前视频。")
+                _emit("VAD 组件不可用，已关闭静音过滤并自动重试当前片段。")
                 stream, info = model.transcribe(
-                    str(asr_audio), language=language, beam_size=1, best_of=1,
+                    str(path), language=language, beam_size=1, best_of=1,
                     temperature=0.0, vad_filter=False, word_timestamps=True,
                     condition_on_previous_text=False,
                 )
-                return collect_segments(stream, info)
+                return collect_segments(stream, info, offset=offset, label=label)
 
-        def _word_density_ok(segs) -> bool:
-            """词级过稀时口型必飘：用于触发一次更稳的重试。"""
+        def _word_density_ok(segs, expect_dur=0.0) -> bool:
             if not segs:
                 return False
             n_words = sum(len(s.get("words") or []) for s in segs)
-            dur = max(0.5, float(segs[-1].get("end") or 0) - float(segs[0].get("start") or 0))
-            # 约每 1.6s 至少一个词；过稀才重跑（避免几乎每次 double 识别拖慢）
-            return n_words >= max(3, int(dur / 1.6))
+            span = max(0.5, float(segs[-1].get("end") or 0) - float(segs[0].get("start") or 0))
+            if n_words < max(3, int(span / 1.6)):
+                return False
+            # 长视频：词轴覆盖率过低 = 第一次常对不上口型
+            if expect_dur >= 90 and n_words > 0:
+                last_end = max(float(s.get("end") or 0) for s in segs)
+                if last_end < expect_dur * 0.72:
+                    return False
+            return True
+
+        def _transcribe_long_chunked(model, wav_path, total_dur):
+            """≥90s：按段识别再拼时间戳，避免一次跑完整长片词轴漂移/截断。"""
+            import tempfile
+            creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            chunk_len, overlap = 75.0, 1.5
+            chunk_dir = Path(tempfile.mkdtemp(prefix="vt_whisper_chunks_"))
+            pattern = chunk_dir / "c_%04d.wav"
+            cmd = [
+                self.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(wav_path), "-map", "0:a:0",
+                "-f", "segment", "-segment_time", str(int(chunk_len)),
+                "-reset_timestamps", "1", "-ac", "1", "-ar", "16000",
+                "-c:a", "pcm_s16le", str(pattern),
+            ]
+            _emit(f"长音频（{total_dur:.0f}s）分段识别：每段约 {int(chunk_len)}s …")
+            proc = subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                creationflags=creation, text=True, encoding="utf-8", errors="replace",
+            )
+            chunks = sorted(chunk_dir.glob("c_*.wav"))
+            if proc.returncode != 0 or not chunks:
+                err = (proc.stderr or "")[-300:]
+                _emit(f"分段失败，回退整段识别：{err or 'unknown'}")
+                try:
+                    shutil.rmtree(chunk_dir, ignore_errors=True)
+                except Exception:
+                    pass
+                return None
+            all_segs = []
+            info = None
+            for i, chunk in enumerate(chunks):
+                if self.cancelled:
+                    raise RuntimeError("任务已取消")
+                offset = i * chunk_len
+                _emit(f"本地识别分段 {i + 1}/{len(chunks)}（起点 {offset:.0f}s）…")
+                segs, info = transcribe_file(
+                    model, chunk, offset=offset, label=f"[{i + 1}/{len(chunks)}]",
+                )
+                # 与上一段重叠区：丢掉本段 offset 附近 overlap 内的重复词
+                if all_segs and overlap > 0:
+                    cut = offset + overlap * 0.35
+                    segs = [s for s in segs if float(s.get("start") or 0) >= cut]
+                    for s in segs:
+                        s["words"] = [
+                            w for w in (s.get("words") or [])
+                            if float(w.get("start") or 0) >= cut
+                        ]
+                all_segs.extend(segs)
+            try:
+                shutil.rmtree(chunk_dir, ignore_errors=True)
+            except Exception:
+                pass
+            return all_segs, info
 
         try:
+            import shutil
             _emit(
                 f"本地识别参数：beam=1、VAD 跳过静音、词级时间戳开启"
                 f"（设备 {self._local_device}，模型 {getattr(self, '_local_model_name', '?')}）"
             )
-            segments, info = transcribe_with(self._local_model)
-            # 仅极端偏稀时重试，避免「小模型也跑两遍」导致体感极慢
-            if not _word_density_ok(segments):
+            segments, info = None, None
+            if audio_dur >= 90 and prep_wav is not None:
+                chunked = _transcribe_long_chunked(self._local_model, asr_audio, audio_dur)
+                if chunked is not None:
+                    segments, info = chunked
+            if segments is None:
+                segments, info = transcribe_file(self._local_model, asr_audio)
+            # 覆盖率/密度不足：关 VAD 整段补跑（解决「第一次偏、再提取才准」）
+            if not _word_density_ok(segments, audio_dur):
                 n_words = sum(len(s.get("words") or []) for s in segments)
-                _emit(f"本地识别词级偏稀（{n_words} 词），关闭 VAD 补跑一次…")
-                segments2, info2 = transcribe_with(self._local_model, beam_size=1, use_vad=False)
-                if _word_density_ok(segments2) or len(segments2) >= len(segments):
+                last_end = max((float(s.get("end") or 0) for s in segments), default=0)
+                _emit(
+                    f"本地识别覆盖不足（词 {n_words}，末词 {last_end:.1f}s / 音频 {audio_dur:.1f}s），"
+                    f"关闭 VAD 整段补跑一次…"
+                )
+                segments2, info2 = transcribe_file(
+                    self._local_model, asr_audio, use_vad=False, label="[补跑]",
+                )
+                if _word_density_ok(segments2, audio_dur) or len(segments2) >= len(segments):
                     segments, info = segments2, info2
         except RuntimeError as exc:
             if self._local_device != "cuda" or self.cancelled:
@@ -1422,17 +1508,16 @@ class TranscribeWorker(QObject):
                 TranscribeWorker._shared_local_model = self._local_model
                 TranscribeWorker._shared_local_model_name = model_name
                 TranscribeWorker._shared_local_device = "cpu"
-            segments, info = transcribe_with(self._local_model)
+            segments, info = transcribe_file(self._local_model, asr_audio)
         detected = getattr(info, "language", None) or language
         plain = "\n".join(
             normalize_subtitle_text(x["text"], language=detected) for x in segments)
         raw = {"provider": "Local Whisper", "model": self.model,
                "language": detected, "segments": segments,
                "words": [word for segment in segments for word in segment.get("words", [])]}
-        _emit(f"本地识别完成：{audio.name}（{len(segments)} 段）")
+        _emit(f"本地识别完成：{audio.name}（{len(segments)} 段，{len(raw['words'])} 词）")
         try:
             if prep_wav is not None:
-                import shutil
                 shutil.rmtree(prep_wav.parent, ignore_errors=True)
         except Exception:
             pass
