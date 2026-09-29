@@ -82,10 +82,10 @@ APP_NAME = "视频工具合集"
 APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.66").strip().lstrip("v") or "1.7.66"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 _SINGLE_INSTANCE_MUTEX = None
-ALL_RESULTS_LABEL = "【全部结果�?
+ALL_RESULTS_LABEL = "【全部结果】"
 ASR_PROVIDERS = ["Groq", "Gemini", "ElevenLabs", "Gladia"]
 PROVIDERS = ASR_PROVIDERS + ["Luma", "Kling"]
-LOCAL_PROVIDER = "本地 Whisper（无需密钥�?
+LOCAL_PROVIDER = "本地 Whisper（无需密钥）"
 AUTO_PROVIDER = "自动选择（按优先级）"
 TRANSCRIPTION_PROVIDERS = [AUTO_PROVIDER, LOCAL_PROVIDER] + ASR_PROVIDERS
 DEFAULT_MODELS = {
@@ -103,22 +103,22 @@ DEFAULT_MODELS = {
 # 本地 Whisper 可选体积（faster-whisper 模型名）
 LOCAL_WHISPER_MODEL_OPTIONS = [
     ("base", "base · 最快（口型可用，语义略弱）"),
-    ("small", "small · �?/ 准确度中上（推荐提速）"),
+    ("small", "small · 快 / 准确度中上（推荐提速）"),
     ("medium", "medium · 语义更稳 / 更慢"),
-    ("large-v3", "large-v3 · 最�?/ 很慢很吃显存"),
+    ("large-v3", "large-v3 · 最准 / 很慢很吃显存"),
 ]
-# 自动模式下的服务优先级：Groq �?�?Gemini �?Gladia �?本地 �?其它
+# 自动模式下的服务优先级：Groq 快 → Gemini → Gladia → 本地 → 其它
 DEFAULT_PROVIDER_PRIORITY = [
     "Groq", "Gemini", "Gladia", LOCAL_PROVIDER, "ElevenLabs", "Luma", "Kling",
 ]
-# 已安装用户配置里若仍是旧默认模型，启动时迁移到可用�?
+# 已安装用户配置里若仍是旧默认模型，启动时迁移到可用值
 _MODEL_MIGRATIONS = {
     "Groq": {
         "whisper-large-v3-turbo": "whisper-large-v3",
         "whisper-large-v3-turbo-latest": "whisper-large-v3",
     },
     "Gemini": {
-        # 1.x / 2.0 系列已关�?�?3.6 Flash
+        # 1.x / 2.0 系列已关停 → 3.6 Flash
         "gemini-1.5-flash": "gemini-3.6-flash",
         "gemini-1.5-flash-latest": "gemini-3.6-flash",
         "gemini-1.5-pro": "gemini-3.6-flash",
@@ -137,10 +137,10 @@ _MODEL_MIGRATIONS = {
 }
 DEFAULT_SHEET_MAPPINGS = [
     {"field": "日期", "column": "A", "source": "date", "value": ""},
-    {"field": "文件�?链接", "column": "B", "source": "file", "value": ""},
+    {"field": "文件名/链接", "column": "B", "source": "file", "value": ""},
     {"field": "中文字幕", "column": "K", "source": "chinese", "value": ""},
     {"field": "原文/葡语", "column": "L", "source": "original", "value": ""},
-    {"field": "云端文件�?, "column": "W", "source": "folder", "value": ""},
+    {"field": "云端文件夹", "column": "W", "source": "folder", "value": ""},
 ]
 DEFAULT_VARIABLE_FIELDS = [
     {"field": "组别", "column": "C", "options": [], "selected": ""},
@@ -148,7 +148,7 @@ DEFAULT_VARIABLE_FIELDS = [
     {"field": "难易程度", "column": "E", "options": [], "selected": ""},
     {"field": "素材来源", "column": "F", "options": [], "selected": ""},
     {"field": "使用软件", "column": "G", "options": [], "selected": ""},
-    {"field": "制作�?", "column": "H", "options": [], "selected": ""},
+    {"field": "制作人1", "column": "H", "options": [], "selected": ""},
     {"field": "字幕审核", "column": "I", "options": [], "selected": ""},
     {"field": "版权审核", "column": "J", "options": [], "selected": ""},
 ]
@@ -249,12 +249,12 @@ class ConfigStore:
                 loaded["round_robin"].setdefault(provider, 0)
                 loaded["models"].setdefault(provider, DEFAULT_MODELS[provider])
             loaded["models"].setdefault(LOCAL_PROVIDER, DEFAULT_MODELS[LOCAL_PROVIDER])
-            # 迁移已知会出�?幻觉的旧模型�?
+            # 迁移已知会出错/幻觉的旧模型名
             for provider, mapping in _MODEL_MIGRATIONS.items():
                 current = str(loaded["models"].get(provider, "") or "")
                 if current in mapping:
                     loaded["models"][provider] = mapping[current]
-            # 识别优先级：Groq �?Gemini �?Gladia �?本地 �?其它（可在「调整顺序」里改）
+            # 识别优先级：Groq → Gemini → Gladia → 本地 → 其它（可在「调整顺序」里改）
             preferred = list(DEFAULT_PROVIDER_PRIORITY)
             old_pri = [p for p in (loaded.get("provider_priority") or []) if p in preferred]
             # 旧默认序统一迁到新推荐序（保留用户在「调整顺序」里手动改过的非旧默认）
@@ -280,10 +280,10 @@ class ConfigStore:
                     if p not in pri:
                         pri.append(p)
                 loaded["provider_priority"] = pri
-            # 本地模型若还是默�?small，升�?medium（用户已选手�?medium/large 则保留）
+            # 本地模型若还是默认 small，升到 medium（用户已选手动 medium/large 则保留）
             if str(loaded["models"].get(LOCAL_PROVIDER, "")).strip() in ("", "small"):
                 # 仅当从未显式改过：若用户故意 small，可在界面再改回
-                # 用配置标记避免反复强�?
+                # 用配置标记避免反复强制
                 if not loaded.get("_local_model_user_set"):
                     loaded["models"][LOCAL_PROVIDER] = DEFAULT_MODELS[LOCAL_PROVIDER]
             old_google = loaded.get("google_sync", {})
@@ -336,7 +336,7 @@ class ConfigStore:
 
 
     def add_key(self, provider: str, key: str, **meta):
-        # 网页会话 JSON 不能�?normalize（会破坏内容）；API Key 仍规范化
+        # 网页会话 JSON 不能走 normalize（会破坏内容）；API Key 仍规范化
         if provider == "ElevenLabs" and el_web.is_web_secret(key):
             raw_key = str(key).strip()
         else:
@@ -350,7 +350,7 @@ class ConfigStore:
                 "id": uuid.uuid4().hex,
                 "key": raw_key,
                 "enabled": True,
-                "status": "未检�?,
+                "status": "未检测",
                 "last_checked": "",
                 "last_error": "",
                 "uses": 0,
@@ -410,14 +410,14 @@ class ConfigStore:
 
 
 def masked_key(key: str) -> str:
-    # ElevenLabs 网页会话：显示标签，不泄露完�?Cookie
+    # ElevenLabs 网页会话：显示标签，不泄露完整 Cookie
     try:
         if el_web.is_web_secret(key):
             return el_web.display_secret(key)
     except Exception:
         pass
     if len(key) <= 9:
-        return "�? * len(key)
+        return "•" * len(key)
     return f"{key[:4]}…{key[-4:]}"
 
 
@@ -439,25 +439,25 @@ def probe_audio_layout(ffmpeg_path: str, media_path: str):
 
 
 def normalize_api_key(key: str) -> str:
-    """清洗粘贴噪声：BOM、零宽字符、首尾引�?空白、行内空白�?""
+    """清洗粘贴噪声：BOM、零宽字符、首尾引号/空白、行内空白。"""
     value = str(key or "")
-    # 去掉常见不可见字�?
+    # 去掉常见不可见字符
     for ch in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u2060", "\xa0"):
         value = value.replace(ch, "")
     value = value.strip().strip("\"'“”‘’`").strip()
-    # 密钥不应含空白；若用户从表格粘出带空格，去掉所有空�?
+    # 密钥不应含空白；若用户从表格粘出带空格，去掉所有空白
     if any(c.isspace() for c in value):
         compact = "".join(value.split())
-        # 仅当去掉空白后仍像密钥（无中文）时采�?
+        # 仅当去掉空白后仍像密钥（无中文）时采用
         if compact and all(ord(c) < 128 for c in compact):
             value = compact
     return value
 
 
 def _looks_like_elevenlabs_key_id(value: str) -> bool:
-    """ElevenLabs 控制台里的「Key ID」是 32/64 �?hex，不是可调用�?secret�?
+    """ElevenLabs 控制台里的「Key ID」是 32/64 位 hex，不是可调用的 secret。
 
-    官方错误：API key ID used as API key �?only the full secret (sk_�? works.
+    官方错误：API key ID used as API key — only the full secret (sk_…) works.
     """
     v = str(value or "").strip()
     if re.fullmatch(r"[0-9a-fA-F]{32}", v):
@@ -468,16 +468,16 @@ def _looks_like_elevenlabs_key_id(value: str) -> bool:
 
 
 def detect_api_provider(key: str) -> str | None:
-    """根据密钥前缀/形态猜测所属服务；无法判断时返�?None�?
+    """根据密钥前缀/形态猜测所属服务；无法判断时返回 None。
 
     规则按「强特征优先」：
-    - Gladia 新版 sk_gla�?必须先于通用 sk_
-    - ElevenLabs 真密钥是 sk_…（不是 sk-，也不是 Key ID �?hex�?
+    - Gladia 新版 sk_gla… 必须先于通用 sk_
+    - ElevenLabs 真密钥是 sk_…（不是 sk-，也不是 Key ID 的 hex）
     """
     value = normalize_api_key(key)
     if not value:
         return None
-    # 网页会话�?
+    # 网页会话包
     try:
         if el_web.is_web_secret(value) or value.startswith(el_web.WEB_KEY_PREFIX):
             return "ElevenLabs"
@@ -485,10 +485,10 @@ def detect_api_provider(key: str) -> str | None:
         pass
     lower = value.casefold()
 
-    # —�?强前缀（几乎可确定）—�?
+    # —— 强前缀（几乎可确定）——
     if value.startswith("gsk_") or lower.startswith("gsk-"):
         return "Groq"
-    # Gladia 新版密钥：sk_gla�?/ sk_gladia…（必须在通用 sk_ 之前�?
+    # Gladia 新版密钥：sk_gla… / sk_gladia…（必须在通用 sk_ 之前）
     if lower.startswith("sk_gla") or lower.startswith("sk_gladia"):
         return "Gladia"
     # Google AI Studio / Gemini
@@ -501,16 +501,16 @@ def detect_api_provider(key: str) -> str | None:
     if lower.startswith("ai") and 35 <= len(value) <= 64 and re.fullmatch(r"[A-Za-z0-9_\-]+", value):
         if not lower.startswith(("airtable", "aidrive")):
             return "Gemini"
-    # ElevenLabs 真·API secret（下划线 sk_，且不是 sk_gla�?
+    # ElevenLabs 真·API secret（下划线 sk_，且不是 sk_gla）
     if value.startswith("sk_") and len(value) >= 20:
         return "ElevenLabs"
     if value.startswith("xi_") and len(value) >= 16:
         return "ElevenLabs"
-    # JWT / Firebase idToken（网页会话用）→ ElevenLabs，勿�?API Key
+    # JWT / Firebase idToken（网页会话用）→ ElevenLabs，勿当 API Key
     if value.count(".") >= 2 and len(value) > 80 and value.startswith("eyJ"):
         return "ElevenLabs"
 
-    # 名称写在密钥�?
+    # 名称写在密钥里
     if "gladia" in lower:
         return "Gladia"
     if "groq" in lower and ("gsk" in lower or len(value) > 20):
@@ -524,18 +524,18 @@ def detect_api_provider(key: str) -> str | None:
     if "kling" in lower:
         return "Kling"
 
-    # Gladia：标�?UUID（带连字符）
+    # Gladia：标准 UUID（带连字符）
     if re.fullmatch(
         r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
         value,
     ):
         return "Gladia"
-    # 32 �?hex：更�?Gladia �?key / 通用 id�?4 �?hex 多为 ElevenLabs「Key ID」误�?
-    # �?不在纯规则里强判，交给联网探�?
+    # 32 位 hex：更像 Gladia 旧 key / 通用 id；64 位 hex 多为 ElevenLabs「Key ID」误贴
+    # → 不在纯规则里强判，交给联网探测
     if re.fullmatch(r"[0-9a-fA-F]{32}", value):
         return "Gladia"
 
-    # OpenAI 风格 sk- 不是本软�?ASR 服务
+    # OpenAI 风格 sk- 不是本软件 ASR 服务
     if value.startswith("sk-"):
         return None
 
@@ -543,40 +543,40 @@ def detect_api_provider(key: str) -> str | None:
 
 
 def detect_api_provider_with_probe(key: str, timeout: float = 8.0) -> tuple[str | None, str]:
-    """先规则识别；失败则对常见服务短超时探测，返回 (provider, 说明)�?""
+    """先规则识别；失败则对常见服务短超时探测，返回 (provider, 说明)。"""
     value = normalize_api_key(key)
     if not value:
-        return None, "空密�?
+        return None, "空密钥"
 
-    # 明确误贴�?ElevenLabs �?Key ID（不�?sk_ secret�?
+    # 明确误贴了 ElevenLabs 的 Key ID（不是 sk_ secret）
     if _looks_like_elevenlabs_key_id(value) and not value.startswith("sk_"):
-        # 先试 Gladia�?2 hex 可能�?Gladia）；64 hex 几乎一定是 EL Key ID
+        # 先试 Gladia（32 hex 可能是 Gladia）；64 hex 几乎一定是 EL Key ID
         if len(value) == 64:
             return None, (
-                "这是 ElevenLabs 的「Key ID」（64 位十六进制），不是可调用的密钥�?
-                "请到 elevenlabs.io �?API Keys 复制完整 secret（以 sk_ 开头）�?
-                "或使用「添加网页会话」粘�?Authorization Bearer�?
+                "这是 ElevenLabs 的「Key ID」（64 位十六进制），不是可调用的密钥。"
+                "请到 elevenlabs.io → API Keys 复制完整 secret（以 sk_ 开头），"
+                "或使用「添加网页会话」粘贴 Authorization Bearer。"
             )
         ok_g, msg_g = check_api_key("Gladia", value, timeout=timeout)
         if ok_g:
-            return "Gladia", "联网探测确认�?Gladia"
+            return "Gladia", "联网探测确认为 Gladia"
         return None, (
-            "无法确认：若�?ElevenLabs，请粘贴 sk_ 开头的完整密钥（不�?Key ID）；"
+            "无法确认：若是 ElevenLabs，请粘贴 sk_ 开头的完整密钥（不是 Key ID）；"
             f"若是 Gladia：{msg_g[:80]}"
         )
 
     guessed = detect_api_provider(value)
     if guessed:
-        # �?sk_ 可能仍歧义：sk_gla 已归 Gladia；纯 sk_ 再弱探测一�?Gladia？不�?
+        # 对 sk_ 可能仍歧义：sk_gla 已归 Gladia；纯 sk_ 再弱探测一次 Gladia？不必
         return guessed, f"按格式识别为 {guessed}"
 
-    # 探测顺序：特征冲突少、响应快的优先；Gladia �?Eleven 前以�?64hex 误走 EL
+    # 探测顺序：特征冲突少、响应快的优先；Gladia 放 Eleven 前以免 64hex 误走 EL
     probe_order = ["Groq", "Gemini", "Gladia", "ElevenLabs"]
     errors = []
     for provider in probe_order:
         ok, message = check_api_key(provider, value, timeout=timeout)
         if ok:
-            return provider, f"联网探测确认�?{provider}"
+            return provider, f"联网探测确认为 {provider}"
         if "key ID" in message or "Key ID" in message:
             errors.append(f"{provider}:{message[:100]}")
             continue
@@ -584,8 +584,8 @@ def detect_api_provider_with_probe(key: str, timeout: float = 8.0) -> tuple[str 
             errors.append(f"{provider}:密钥形态匹配但未通过")
         else:
             errors.append(f"{provider}:{message[:60]}")
-    detail = "�?.join(errors[:4])
-    return None, f"无法识别（{detail}�?
+    detail = "；".join(errors[:4])
+    return None, f"无法识别（{detail}）"
 
 
 def check_api_key(provider: str, key: str, timeout: float = 20.0) -> tuple[bool, str]:
@@ -597,8 +597,8 @@ def check_api_key(provider: str, key: str, timeout: float = 20.0) -> tuple[bool,
             return False, "密钥格式异常：含有空格、中文、全角字符或其他非法字符"
         if provider == "ElevenLabs" and _looks_like_elevenlabs_key_id(key) and not key.startswith("sk_"):
             return False, (
-                "格式错误：粘贴的�?ElevenLabs「Key ID」而不是密钥�?
-                "请复制以 sk_ 开头的完整 API secret，或改用「添加网页会话」�?
+                "格式错误：粘贴的是 ElevenLabs「Key ID」而不是密钥。"
+                "请复制以 sk_ 开头的完整 API secret，或改用「添加网页会话」。"
             )
         if provider == "Groq":
             resp = requests.get("https://api.groq.com/openai/v1/models",
@@ -607,7 +607,7 @@ def check_api_key(provider: str, key: str, timeout: float = 20.0) -> tuple[bool,
             resp = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
                                 headers={**headers, "x-goog-api-key": key}, timeout=timeout)
         elif provider == "ElevenLabs":
-            # �?JWT �?临时包成网页会话再验
+            # 纯 JWT → 临时包成网页会话再验
             if key.count(".") >= 2 and key.startswith("eyJ") and not el_web.is_web_secret(key):
                 try:
                     packed = el_web.pack_web_session(
@@ -621,15 +621,15 @@ def check_api_key(provider: str, key: str, timeout: float = 20.0) -> tuple[bool,
             # 把官方「key ID」错误翻译成人话
             if (not ok) and ("invalid_api_key" in (message or "") or "API key ID" in (message or "")):
                 return False, (
-                    "ElevenLabs 拒绝：当前字符串不是有效 API secret（常见原因：只复制了 Key ID）�?
-                    "请到 https://elevenlabs.io/app/settings/api-keys 创建/复制 sk_�?密钥�?
-                    "或使用「添�?ElevenLabs 网页会话」。原文：" + message[:160]
+                    "ElevenLabs 拒绝：当前字符串不是有效 API secret（常见原因：只复制了 Key ID）。"
+                    "请到 https://elevenlabs.io/app/settings/api-keys 创建/复制 sk_… 密钥，"
+                    "或使用「添加 ElevenLabs 网页会话」。原文：" + message[:160]
                 )
             return ok, message
         elif provider == "Luma":
-            return True, "密钥格式有效，免联机检�?
+            return True, "密钥格式有效，免联机检测"
         elif provider == "Kling":
-            return True, "密钥格式有效，免联机检�?
+            return True, "密钥格式有效，免联机检测"
         else:
             # Gladia
             resp = requests.get("https://api.gladia.io/v2/pre-recorded?limit=1",
@@ -640,7 +640,7 @@ def check_api_key(provider: str, key: str, timeout: float = 20.0) -> tuple[bool,
         if provider == "ElevenLabs" or "invalid_api_key" in body or "API key ID" in body:
             return False, (
                 f"HTTP {resp.status_code}: {body}\n"
-                "提示：ElevenLabs 必须使用 sk_ 完整密钥，不能用控制台里�?Key ID�?
+                "提示：ElevenLabs 必须使用 sk_ 完整密钥，不能用控制台里的 Key ID。"
             )
         return False, f"HTTP {resp.status_code}: {body}"
     except Exception as exc:
@@ -648,9 +648,9 @@ def check_api_key(provider: str, key: str, timeout: float = 20.0) -> tuple[bool,
 
 
 def reclassify_misplaced_keys(store: "ConfigStore") -> list[str]:
-    """修正历史误归类：�?sk_gla 进了 ElevenLabs、纯 Key ID 标错等。返回操作说明�?""
+    """修正历史误归类：如 sk_gla 进了 ElevenLabs、纯 Key ID 标错等。返回操作说明。"""
     notes = []
-    # 1) Gladia �?sk_gla 若在 ElevenLabs �?挪回 Gladia
+    # 1) Gladia 的 sk_gla 若在 ElevenLabs → 挪回 Gladia
     move_pairs = []
     for provider in list(PROVIDERS):
         for item in list(store.data["providers"].get(provider) or []):
@@ -665,10 +665,10 @@ def reclassify_misplaced_keys(store: "ConfigStore") -> list[str]:
                         provider, item["id"],
                         status="格式错误",
                         last_error=(
-                            "这是 ElevenLabs Key ID，不�?sk_ 密钥。请删除后重新添�?sk_�?或网页会话�?
+                            "这是 ElevenLabs Key ID，不是 sk_ 密钥。请删除后重新添加 sk_… 或网页会话。"
                         ),
                     )
-                    notes.append(f"标记 {provider}/{masked_key(key)} 为格式错误（Key ID�?)
+                    notes.append(f"标记 {provider}/{masked_key(key)} 为格式错误（Key ID）")
                 continue
             move_pairs.append((provider, right, item))
     for src, dst, item in move_pairs:
@@ -678,9 +678,9 @@ def reclassify_misplaced_keys(store: "ConfigStore") -> list[str]:
         store.remove_key(src, item["id"])
         if not exists:
             store.add_key(dst, key)
-            notes.append(f"已迁�?{masked_key(key)}：{src} �?{dst}")
+            notes.append(f"已迁移 {masked_key(key)}：{src} → {dst}")
         else:
-            notes.append(f"已从 {src} 删除重复 {masked_key(key)}（{dst} 已有�?)
+            notes.append(f"已从 {src} 删除重复 {masked_key(key)}（{dst} 已有）")
     return notes
 
 
@@ -735,7 +735,7 @@ def words_to_segments(words):
         current.append(text)
         end = w_end
         joined = "".join(current) if any("\u4e00" <= c <= "\u9fff" for c in text) else " ".join(current)
-        if end - start >= 6 or len(joined) >= 34 or re.search(r"[。！�?!?]$", text):
+        if end - start >= 6 or len(joined) >= 34 or re.search(r"[。！？.!?]$", text):
             segments.append({"start": start, "end": end, "text": joined})
             current, start, end = [], None, None
     if current:
@@ -826,7 +826,7 @@ class TranscribeWorker(QObject):
     result_ready = Signal(str, str, str, str)
     finished = Signal(bool, str)
 
-    # 图文成片/批量识别每次新建 Worker 时复用同一 Whisper，避�?12 条任务重复加�?medium 卡死�?
+    # 图文成片/批量识别每次新建 Worker 时复用同一 Whisper，避免 12 条任务重复加载 medium 卡死感
     _shared_local_lock = threading.Lock()
     _shared_local_model = None
     _shared_local_model_name = None
@@ -881,7 +881,7 @@ class TranscribeWorker(QObject):
             failures = []
             for index, source in enumerate(self.files):
                 if self.cancelled:
-                    raise RuntimeError("任务已取�?)
+                    raise RuntimeError("任务已取消")
                 source_key = stable_key(source_signature(source))
                 cached = state["results"].get(source_key)
                 if cached:
@@ -906,13 +906,13 @@ class TranscribeWorker(QObject):
                 except Exception as exc:
                     message=f"{display}：{exc}"
                     failures.append(message); self.log.emit(f"当前素材失败，已记录并继续下一项：{message}")
-                    write_app_log(message,"ERROR","字幕批处�?)
+                    write_app_log(message,"ERROR","字幕批处理")
                 self.progress.emit(round((index + 1) / len(self.files) * 100))
             state["status"] = "completed_with_errors" if failures else "completed"
             atomic_write_json(self.checkpoint_path, state)
             succeeded=len(self.files)-len(failures)
             self.finished.emit(bool(succeeded),
-                               f"批量字幕完成：成�?{succeeded} 个，失败 {len(failures)} 个；失败项已写入软件日志�?
+                               f"批量字幕完成：成功 {succeeded} 个，失败 {len(failures)} 个；失败项已写入软件日志。"
                                if failures else "完成，字幕与中文对照已显示在当前窗口")
         except Exception as exc:
             try:
@@ -938,7 +938,7 @@ class TranscribeWorker(QObject):
             shutil.rmtree(work, ignore_errors=True)
 
     def _media_has_audio(self, media_path: Path) -> bool:
-        """探测文件是否含音轨（TikTok 等有时只下到静音画面）�?""
+        """探测文件是否含音轨（TikTok 等有时只下到静音画面）。"""
         ffprobe = str(Path(self.ffmpeg_path).with_name(
             "ffprobe.exe" if os.name == "nt" else "ffprobe"))
         if not Path(ffprobe).is_file():
@@ -971,14 +971,14 @@ class TranscribeWorker(QObject):
 
         ok, detail = ytdlp_status()
         if not ok:
-            raise RuntimeError("缺少网络视频解析组件 yt-dlp，请到“组件管理”点击「一键更�?yt-dlp」�?)
+            raise RuntimeError("缺少网络视频解析组件 yt-dlp，请到“组件管理”点击「一键更新 yt-dlp」。")
 
-        self.log.emit(f"正在解析并静默下载网络视频音�?…（{detail}�?)
+        self.log.emit(f"正在解析并静默下载网络视频音轨 …（{detail}）")
         last_percent = {"value": ""}
 
         def download_hook(data):
             if self.cancelled:
-                raise RuntimeError("任务已取�?)
+                raise RuntimeError("任务已取消")
             if data.get("status") == "downloading":
                 percent = re.sub(r"\x1b\[[0-9;]*m", "", data.get("_percent_str", "")).strip()
                 if percent and percent != last_percent["value"]:
@@ -1005,7 +1005,7 @@ class TranscribeWorker(QObject):
         last_exc: Exception | None = None
         for fmt, extra in format_attempts:
             try:
-                # 清掉上一轮无音轨的残片，避免误复�?
+                # 清掉上一轮无音轨的残片，避免误复用
                 for old in temp.glob("online_source.*"):
                     if old.suffix.lower() in (".part", ".ytdl", ".json"):
                         continue
@@ -1033,12 +1033,12 @@ class TranscribeWorker(QObject):
                     continue
                 if self._media_has_audio(candidate):
                     source = candidate
-                    self.log.emit(f"已下载含音轨媒体：{candidate.name}（格�?{fmt}�?)
+                    self.log.emit(f"已下载含音轨媒体：{candidate.name}（格式 {fmt}）")
                     break
                 self.log.emit(
-                    f"下载文件无音轨（{candidate.name}，格�?{fmt}），尝试其它格式�?
+                    f"下载文件无音轨（{candidate.name}，格式 {fmt}），尝试其它格式…"
                 )
-                last_exc = RuntimeError("下载结果无音�?)
+                last_exc = RuntimeError("下载结果无音轨")
             except Exception as exc:
                 last_exc = exc
                 self.log.emit(f"下载尝试失败（{fmt}）：{exc}")
@@ -1046,10 +1046,10 @@ class TranscribeWorker(QObject):
 
         if not source:
             hint = (
-                "网络视频下载完成，但没有可用音轨�?
-                "TikTok/抖音等有时只下到静音画面�?
-                "请：�?组件管理更新 yt-dlp；② 换浏览器可播的完整链接；"
-                "�?或先本地下载含声音的 mp4 再识别�?
+                "网络视频下载完成，但没有可用音轨。"
+                "TikTok/抖音等有时只下到静音画面。"
+                "请：① 组件管理更新 yt-dlp；② 换浏览器可播的完整链接；"
+                "③ 或先本地下载含声音的 mp4 再识别。"
             )
             if last_exc:
                 raise RuntimeError(f"{hint}\n技术详情：{last_exc}") from last_exc
@@ -1061,7 +1061,7 @@ class TranscribeWorker(QObject):
         candidates = ([{"id": "local", "key": ""}] if self.provider == LOCAL_PROVIDER
                       else self.store.candidates(self.provider))
         if not candidates:
-            raise RuntimeError(f"{self.provider} 没有可用密钥，请先到“密钥管理”添加并检测�?)
+            raise RuntimeError(f"{self.provider} 没有可用密钥，请先到“密钥管理”添加并检测。")
         # 非断点模式：清掉该素材工作目录，避免复用 Groq 错误分段缓存
         if not self.resume_existing:
             work = self.output_dir / ".work" / self._source_work_key(source_value)
@@ -1075,10 +1075,10 @@ class TranscribeWorker(QObject):
             if saved_path and saved_path.exists() and self._media_has_audio(saved_path):
                 source = saved_path
                 result_name = metadata.get("title") or source.name
-                self.log.emit("断点续接：复用已下载的网络媒体�?)
+                self.log.emit("断点续接：复用已下载的网络媒体。")
             else:
                 if saved_path and saved_path.exists() and not self._media_has_audio(saved_path):
-                    self.log.emit("缓存媒体无音轨，重新下载�?)
+                    self.log.emit("缓存媒体无音轨，重新下载…")
                     try:
                         saved_path.unlink(missing_ok=True)
                     except Exception:
@@ -1091,20 +1091,20 @@ class TranscribeWorker(QObject):
 
         if not self._media_has_audio(source):
             raise RuntimeError(
-                f"媒体没有音轨，无法识别字幕：{result_name}�?
-                "（TikTok/抖音链接有时只下到静音画面；请更�?yt-dlp 或改用含声音的本地文件。）"
+                f"媒体没有音轨，无法识别字幕：{result_name}。"
+                "（TikTok/抖音链接有时只下到静音画面；请更新 yt-dlp 或改用含声音的本地文件。）"
             )
 
         if self.provider == LOCAL_PROVIDER:
             recognition_input = source
-            self.log.emit("本地 Whisper 直接流式读取媒体，不创建整段 PCM 副本�?)
+            self.log.emit("本地 Whisper 直接流式读取媒体，不创建整段 PCM 副本。")
         elif self.provider == "Groq":
             recognition_input = source
-            self.log.emit("Groq 将直接从媒体生成 90 秒分段，不创建整�?PCM 副本�?)
+            self.log.emit("Groq 将直接从媒体生成 90 秒分段，不创建整段 PCM 副本。")
         else:
             audio = temp / "audio.wav"
             if not audio.exists() or audio.stat().st_size == 0:
-                self.log.emit("创建临时 PCM 无损识别副本（保留原声道；不会修改视频音轨）�?)
+                self.log.emit("创建临时 PCM 无损识别副本（保留原声道；不会修改视频音轨）…")
                 cmd = [self.ffmpeg_path, "-y", "-i", str(source), "-map", "0:a:0", "-vn",
                        "-c:a", "pcm_s16le", str(audio)]
                 creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -1115,24 +1115,24 @@ class TranscribeWorker(QObject):
                         "无法提取音频，请确认视频包含音轨。\n" + (proc.stderr or "")[-800:]
                     )
             else:
-                self.log.emit("断点续接：复用已提取的识别音频�?)
+                self.log.emit("断点续接：复用已提取的识别音频。")
             recognition_input = audio
 
         last_error = ""
         for item in candidates:
             if self.cancelled:
-                raise RuntimeError("任务已取�?)
+                raise RuntimeError("任务已取消")
             if self.provider == LOCAL_PROVIDER:
-                self.log.emit("使用本地 Whisper 模型，无需上传媒体�?API 密钥 �?)
+                self.log.emit("使用本地 Whisper 模型，无需上传媒体或 API 密钥 …")
             else:
-                self.log.emit(f"使用 {self.provider} 密钥 {masked_key(item['key'])} �?)
+                self.log.emit(f"使用 {self.provider} 密钥 {masked_key(item['key'])} …")
             try:
                 srt, plain, raw = self._call_provider(recognition_input, item["key"], temp)
                 srt = normalize_required_capitalization(srt)
                 plain = normalize_required_capitalization(plain)
                 chinese = self._translate_chinese(plain) if self.translate_result else ""
                 if not self.translate_result:
-                    self.log.emit("已生成精确时间轴；Reels 快速模式跳过中文对照翻译�?)
+                    self.log.emit("已生成精确时间轴；Reels 快速模式跳过中文对照翻译。")
                 self.result_ready.emit(result_name, plain, chinese, srt)
                 if self.provider != LOCAL_PROVIDER:
                     self.store.mark_use(self.provider, item["id"], "有效", "")
@@ -1148,19 +1148,19 @@ class TranscribeWorker(QObject):
                 else:
                     status = "异常"
                 self.store.mark_use(self.provider, item["id"], status, last_error)
-                self.log.emit(f"密钥 {masked_key(item['key'])} 失败（{status}），自动轮换下一枚�?)
+                self.log.emit(f"密钥 {masked_key(item['key'])} 失败（{status}），自动轮换下一枚。")
             except requests.RequestException as exc:
                 last_error = f"网络请求失败：{exc}"
                 if self.provider != LOCAL_PROVIDER:
                     self.store.mark_use(self.provider, item["id"], "异常", last_error)
-                    self.log.emit(f"密钥 {masked_key(item['key'])} 网络失败，保留分段进度并轮换下一枚�?)
+                    self.log.emit(f"密钥 {masked_key(item['key'])} 网络失败，保留分段进度并轮换下一枚。")
         primary_error=f"{self.provider} 的可用密钥均调用失败。最后错误：{last_error}"
         if self.allow_provider_fallback:
             fallbacks=list(self.store.data.get("provider_priority") or [])+[LOCAL_PROVIDER]
             for provider in fallbacks:
                 if provider==self.provider: continue
                 if provider!=LOCAL_PROVIDER and not self.store.has_candidates(provider): continue
-                self.log.emit(f"{primary_error}；自动切换到 {provider} 继续识别�?)
+                self.log.emit(f"{primary_error}；自动切换到 {provider} 继续识别。")
                 write_app_log(f"{primary_error}；切换到 {provider}","WARNING","字幕识别")
                 child=TranscribeWorker(self.store,provider,self.store.data["models"].get(provider,DEFAULT_MODELS[provider]),[],
                                        str(self.output_dir),self.language,self.diarize,self.ffmpeg_path,
@@ -1180,11 +1180,11 @@ class TranscribeWorker(QObject):
         chinese_count = sum("\u4e00" <= c <= "\u9fff" for c in visible)
         if visible and chinese_count / len(visible) > 0.45:
             return text
-        self.log.emit("正在生成中文字幕对照 �?)
+        self.log.emit("正在生成中文字幕对照 …")
         for item in self.store.candidates("Gemini"):
             try:
-                prompt = ("把下面字幕准确翻译成简体中文。保留原有换行和段落顺序，只输出译文�?
-                          "不要解释，不�?Markdown：\n\n" + text)
+                prompt = ("把下面字幕准确翻译成简体中文。保留原有换行和段落顺序，只输出译文，"
+                          "不要解释，不要 Markdown：\n\n" + text)
                 model = self.store.data["models"].get("Gemini", DEFAULT_MODELS["Gemini"])
                 response = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -1233,7 +1233,7 @@ class TranscribeWorker(QObject):
         except ImportError as exc:
             raise RuntimeError("缺少本地字幕组件，请运行：pip install faster-whisper") from exc
         model_name = str(self.model or DEFAULT_MODELS[LOCAL_PROVIDER]).strip() or "medium"
-        # 兼容界面展示�?
+        # 兼容界面展示名
         for code, label in LOCAL_WHISPER_MODEL_OPTIONS:
             if model_name == label or model_name.startswith(code):
                 model_name = code
@@ -1250,7 +1250,7 @@ class TranscribeWorker(QObject):
                 pass
             write_app_log(msg, "INFO", "字幕识别")
 
-        # 复用�?Worker 的共享模型（图文成片每条任务都会新建 Worker�?
+        # 复用跨 Worker 的共享模型（图文成片每条任务都会新建 Worker）
         with TranscribeWorker._shared_local_lock:
             shared_ok = (
                 TranscribeWorker._shared_local_model is not None
@@ -1260,14 +1260,14 @@ class TranscribeWorker(QObject):
                 self._local_model = TranscribeWorker._shared_local_model
                 self._local_device = TranscribeWorker._shared_local_device or "cpu"
                 self._local_model_name = model_name
-                _emit(f"复用已加载的本地 Whisper 模型：{model_name}（{self._local_device}�?)
+                _emit(f"复用已加载的本地 Whisper 模型：{model_name}（{self._local_device}）")
             else:
                 _emit(
                     f"正在加载本地 Whisper 模型：{model_name}"
-                    f"（首次使用会下载；medium/large �?CPU 上可能需数分钟，并非卡死）�?
+                    f"（首次使用会下载；medium/large 在 CPU 上可能需数分钟，并非卡死）…"
                 )
                 has_cuda = ctranslate2.get_cuda_device_count() > 0
-                # CPU 多线程；small �?int8 更快。不影响词级时间戳准确度的前提下提速加载�?
+                # CPU 多线程；small 用 int8 更快。不影响词级时间戳准确度的前提下提速加载。
                 cpu_threads = max(2, min(16, (os.cpu_count() or 4)))
                 try:
                     self._local_model = WhisperModel(
@@ -1292,11 +1292,11 @@ class TranscribeWorker(QObject):
                 TranscribeWorker._shared_local_model = self._local_model
                 TranscribeWorker._shared_local_model_name = model_name
                 TranscribeWorker._shared_local_device = self._local_device
-                _emit(f"本地 Whisper 模型已就绪：{model_name}（{self._local_device}�?)
+                _emit(f"本地 Whisper 模型已就绪：{model_name}（{self._local_device}）")
 
         language = None if not self.language or self.language == "auto" else self.language
 
-        # 先抽 mono 16k WAV：本�?Whisper 解码更快、时间戳更稳（避免直接喂整段 mp4 又慢又容易第一次对不齐�?
+        # 先抽 mono 16k WAV：本地 Whisper 解码更快、时间戳更稳（避免直接喂整段 mp4 又慢又容易第一次对不齐）
         asr_audio = Path(audio)
         prep_wav = None
         try:
@@ -1304,7 +1304,7 @@ class TranscribeWorker(QObject):
             creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             prep_dir = Path(tempfile.mkdtemp(prefix="vt_whisper_"))
             prep_wav = prep_dir / "asr_16k.wav"
-            _emit(f"本地识别：抽取音�?{audio.name} �?16k mono �?)
+            _emit(f"本地识别：抽取音轨 {audio.name} → 16k mono …")
             prep = subprocess.run(
                 [
                     self.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
@@ -1330,13 +1330,13 @@ class TranscribeWorker(QObject):
             audio_dur = float(video_duration(self.ffmpeg_path, str(asr_audio)) or 0)
         except Exception:
             audio_dur = 0.0
-        _emit(f"开始本地识别：{asr_audio.name}（约 {audio_dur:.0f}s）�?)
+        _emit(f"开始本地识别：{asr_audio.name}（约 {audio_dur:.0f}s）…")
 
         def collect_segments(stream, info, *, offset=0.0, label=""):
             segments = []
             for item in stream:
                 if self.cancelled:
-                    raise RuntimeError("任务已取�?)
+                    raise RuntimeError("任务已取消")
                 words = [
                     {
                         "start": float(word.start) + offset,
@@ -1352,7 +1352,7 @@ class TranscribeWorker(QObject):
                     "words": words,
                 })
                 if len(segments) % 5 == 0 or len(segments) == 1:
-                    _emit(f"本地识别中{label}：已生成 {len(segments)} 条字�?�?)
+                    _emit(f"本地识别中{label}：已生成 {len(segments)} 条字幕 …")
             return segments, info
 
         def transcribe_file(model, path, *, offset=0.0, beam_size=None, use_vad=None, label=""):
@@ -1362,7 +1362,7 @@ class TranscribeWorker(QObject):
             except ImportError:
                 vad_default = False
                 if use_vad is None:
-                    _emit("未检测到 ONNX Runtime，已自动关闭 VAD 静音过滤并继续识别�?)
+                    _emit("未检测到 ONNX Runtime，已自动关闭 VAD 静音过滤并继续识别。")
             if use_vad is None:
                 use_vad = vad_default
             if beam_size is None:
@@ -1392,7 +1392,7 @@ class TranscribeWorker(QObject):
             except RuntimeError as exc:
                 if not use_vad or "onnxruntime" not in str(exc).lower():
                     raise
-                _emit("VAD 组件不可用，已关闭静音过滤并自动重试当前片段�?)
+                _emit("VAD 组件不可用，已关闭静音过滤并自动重试当前片段。")
                 stream, info = model.transcribe(
                     str(path), language=language, beam_size=1, best_of=1,
                     temperature=0.0, vad_filter=False, word_timestamps=True,
@@ -1407,7 +1407,7 @@ class TranscribeWorker(QObject):
             span = max(0.5, float(segs[-1].get("end") or 0) - float(segs[0].get("start") or 0))
             if n_words < max(3, int(span / 1.6)):
                 return False
-            # 长视频：词轴覆盖率过�?= 第一次常对不上口�?/ 总时长偏�?
+            # 长视频：词轴覆盖率过低 = 第一次常对不上口型 / 总时长偏短
             if expect_dur >= 90 and n_words > 0:
                 last_end = max(float(s.get("end") or 0) for s in segs)
                 if last_end < expect_dur * 0.90:
@@ -1436,7 +1436,7 @@ class TranscribeWorker(QObject):
             return current
 
         def _transcribe_long_chunked(model, wav_path, total_dur, *, use_vad=None):
-            """�?0s：按段识别再拼时间戳，避免一次跑完整长片词轴漂移/截断�?""
+            """≥90s：按段识别再拼时间戳，避免一次跑完整长片词轴漂移/截断。"""
             import tempfile
             creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             chunk_len, overlap = 75.0, 1.5
@@ -1449,7 +1449,7 @@ class TranscribeWorker(QObject):
                 "-reset_timestamps", "1", "-ac", "1", "-ar", "16000",
                 "-c:a", "pcm_s16le", str(pattern),
             ]
-            _emit(f"长音频（{total_dur:.0f}s）分段识别：每段�?{int(chunk_len)}s �?)
+            _emit(f"长音频（{total_dur:.0f}s）分段识别：每段约 {int(chunk_len)}s …")
             proc = subprocess.run(
                 cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                 creationflags=creation, text=True, encoding="utf-8", errors="replace",
@@ -1468,7 +1468,7 @@ class TranscribeWorker(QObject):
             offset = 0.0
             for i, chunk in enumerate(chunks):
                 if self.cancelled:
-                    raise RuntimeError("任务已取�?)
+                    raise RuntimeError("任务已取消")
                 try:
                     chunk_dur = float(video_duration(self.ffmpeg_path, str(chunk)) or 0)
                 except Exception:
@@ -1477,13 +1477,13 @@ class TranscribeWorker(QObject):
                     chunk_dur = float(chunk_len)
                 _emit(
                     f"本地识别分段 {i + 1}/{len(chunks)}"
-                    f"（起�?{offset:.0f}s，本段约 {chunk_dur:.0f}s）�?
+                    f"（起点 {offset:.0f}s，本段约 {chunk_dur:.0f}s）…"
                 )
                 segs, info = transcribe_file(
                     model, chunk, offset=offset, use_vad=use_vad,
                     label=f"[{i + 1}/{len(chunks)}]",
                 )
-                # 段边界去重：丢掉紧贴本段起点的重复词（相邻段偶发粘连�?
+                # 段边界去重：丢掉紧贴本段起点的重复词（相邻段偶发粘连）
                 if all_segs and overlap > 0:
                     cut = offset + min(overlap * 0.35, max(0.15, chunk_dur * 0.02))
                     segs = [s for s in segs if float(s.get("start") or 0) >= cut]
@@ -1503,8 +1503,8 @@ class TranscribeWorker(QObject):
         try:
             import shutil
             _emit(
-                f"本地识别参数：beam=1、VAD 跳过静音、词级时间戳开�?
-                f"（设�?{self._local_device}，模�?{getattr(self, '_local_model_name', '?')}�?
+                f"本地识别参数：beam=1、VAD 跳过静音、词级时间戳开启"
+                f"（设备 {self._local_device}，模型 {getattr(self, '_local_model_name', '?')}）"
             )
             segments, info = None, None
             if audio_dur >= 90 and prep_wav is not None:
@@ -1513,12 +1513,12 @@ class TranscribeWorker(QObject):
                     segments, info = chunked
             if segments is None:
                 segments, info = transcribe_file(self._local_model, asr_audio)
-            # 覆盖�?密度不足：先�?VAD 整段补跑；长片仍不足再强制分段识�?
+            # 覆盖率/密度不足：先关 VAD 整段补跑；长片仍不足再强制分段识别
             if not _word_density_ok(segments, audio_dur):
                 n_words, last_end, ratio = _coverage_stats(segments, audio_dur)
                 _emit(
-                    f"本地识别覆盖不足（词 {n_words}，末�?{last_end:.1f}s / 音频 {audio_dur:.1f}s�?
-                    f"{ratio * 100:.0f}%），关闭 VAD 整段补跑一次�?
+                    f"本地识别覆盖不足（词 {n_words}，末词 {last_end:.1f}s / 音频 {audio_dur:.1f}s，"
+                    f"{ratio * 100:.0f}%），关闭 VAD 整段补跑一次…"
                 )
                 segments2, info2 = transcribe_file(
                     self._local_model, asr_audio, use_vad=False, label="[补跑]",
@@ -1530,7 +1530,7 @@ class TranscribeWorker(QObject):
                     and prep_wav is not None
                     and not _word_density_ok(segments, audio_dur)
                 ):
-                    _emit("�?VAD 后覆盖仍不足，强制再跑一遍分段识别�?)
+                    _emit("关 VAD 后覆盖仍不足，强制再跑一遍分段识别…")
                     chunked3 = _transcribe_long_chunked(
                         self._local_model, asr_audio, audio_dur, use_vad=False,
                     )
@@ -1562,13 +1562,13 @@ class TranscribeWorker(QObject):
         n_words, last_end, ratio = _coverage_stats(segments, audio_dur)
         cover_note = ""
         if audio_dur >= 15:
-            cover_note = f"，末�?{last_end:.1f}s / 音频 {audio_dur:.1f}s（覆�?{ratio * 100:.0f}%�?
+            cover_note = f"，末词 {last_end:.1f}s / 音频 {audio_dur:.1f}s（覆盖 {ratio * 100:.0f}%）"
             if ratio < 0.85:
                 _emit(
-                    f"�?词轴明显短于音频{cover_note}。若口播未提前结束，请换模型或「重新提取」�?
+                    f"⚠ 词轴明显短于音频{cover_note}。若口播未提前结束，请换模型或「重新提取」。"
                 )
         _emit(
-            f"本地识别完成：{audio.name}（{len(segments)} 段，{n_words} 词{cover_note}�?
+            f"本地识别完成：{audio.name}（{len(segments)} 段，{n_words} 词{cover_note}）"
         )
         try:
             if prep_wav is not None:
@@ -1578,21 +1578,21 @@ class TranscribeWorker(QObject):
         return segments_to_srt(segments, language=detected), plain, raw
 
     def _groq_payload_is_suspicious(self, payload: dict, duration: float) -> str:
-        """识别 turbo 等模型在希腊语等语种上的典型幻觉（极短文�?+ 水印词）�?""
+        """识别 turbo 等模型在希腊语等语种上的典型幻觉（极短文本 + 水印词）。"""
         text = str(payload.get("text") or "").strip()
         words = payload.get("words") or []
         segments = payload.get("segments") or []
         lower = text.casefold()
-        # 已知幻觉：把整段口播压成水印/「字幕」二�?
+        # 已知幻觉：把整段口播压成水印/「字幕」二字
         if "authorwave" in lower or "υπότιτλοι" in lower or "υποτιτλοι" in lower:
             if len(text) < 80:
                 return f"疑似幻觉文本：{text[:60]}"
-        # 时长 > 12s 却文�?词数明显过少（turbo 幻觉�?large-v3 偶发截断�?
+        # 时长 > 12s 却文本/词数明显过少（turbo 幻觉或 large-v3 偶发截断）
         if duration >= 12:
             min_chars = max(60, int(duration * 2.5))
             min_words = max(8, int(duration * 0.6))
             if len(text) < min_chars or (words and len(words) < min_words and len(segments) <= 2):
-                return f"结果过稀（{len(text)} �?{len(words)} �?{duration:.0f}s）：{text[:60]}"
+                return f"结果过稀（{len(text)} 字/{len(words)} 词/{duration:.0f}s）：{text[:60]}"
         return ""
 
     def _groq_transcribe_file(self, chunk: Path, key: str, model: str) -> dict:
@@ -1622,8 +1622,8 @@ class TranscribeWorker(QObject):
         pattern = chunks_dir / "chunk_%03d.wav"
         creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         segment_seconds = 90
-        # 统一�?mono 16k 再分段，体积更小、Groq 更稳
-        # 注意：不要用 0:a:0?（可选映射）——无音轨时会生成 0 流输出却�?return 0，导致「无 stream�?
+        # 统一抽 mono 16k 再分段，体积更小、Groq 更稳
+        # 注意：不要用 0:a:0?（可选映射）——无音轨时会生成 0 流输出却仍 return 0，导致「无 stream」
         prepared = temp / "groq_source.wav"
         if not prepared.exists() or prepared.stat().st_size < 1000:
             prep = subprocess.run(
@@ -1636,14 +1636,14 @@ class TranscribeWorker(QObject):
                 err = (prep.stderr or "")[-600:]
                 if "Stream map" in err or "does not contain" in err or "matches no streams" in err:
                     raise RuntimeError(
-                        "媒体没有可识别的音轨（常见于 TikTok/抖音只下到静音画面）�?
-                        "请更�?yt-dlp 后重试链接，或改用含声音的本地视频。\n" + err
+                        "媒体没有可识别的音轨（常见于 TikTok/抖音只下到静音画面）。"
+                        "请更新 yt-dlp 后重试链接，或改用含声音的本地视频。\n" + err
                     )
                 # 其它错误：回退对源文件分段（仍要求有音轨）
                 prepared = audio
         chunks = sorted(chunks_dir.glob("chunk_*.wav"), key=lambda path: rename_natural_key(path.name))
         if not chunks:
-            self.log.emit("正在把长音频切成 90 秒无损识别分�?�?)
+            self.log.emit("正在把长音频切成 90 秒无损识别分段 …")
             cmd = [self.ffmpeg_path, "-y", "-i", str(prepared), "-map", "0:a:0", "-vn", "-f", "segment",
                    "-segment_time", str(segment_seconds), "-reset_timestamps", "1",
                    "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(pattern)]
@@ -1654,14 +1654,14 @@ class TranscribeWorker(QObject):
                 err = (result.stderr or "")[-800:]
                 if "does not contain any stream" in err or "matches no streams" in err:
                     raise RuntimeError(
-                        "无法切分识别音频：文件没有音轨�?
+                        "无法切分识别音频：文件没有音轨。"
                         "TikTok 等链接请确保下载含声音的版本，或使用本地 mp4。\n" + err
                     )
                 raise RuntimeError("Groq 长音频分段失败。\n" + err)
         else:
-            self.log.emit(f"断点续接：复�?{len(chunks)} 个长音频分段�?)
+            self.log.emit(f"断点续接：复用 {len(chunks)} 个长音频分段。")
         cache_path = temp / "groq_chunk_results.json"
-        # 模型名变了就丢弃旧缓存（避免 turbo 幻觉结果永久复用�?
+        # 模型名变了就丢弃旧缓存（避免 turbo 幻觉结果永久复用）
         cache = read_json_file(cache_path, {})
         if cache.get("_model") != self.model:
             cache = {"_model": self.model}
@@ -1683,16 +1683,16 @@ class TranscribeWorker(QObject):
                 self.log.emit(f"Groq 断点续接：跳过已完成分段 {number}/{len(chunks)}")
             else:
                 if payload:
-                    self.log.emit(f"Groq 分段 {number} 缓存结果异常，重新请�?�?)
+                    self.log.emit(f"Groq 分段 {number} 缓存结果异常，重新请求 …")
                 used_model = primary_model
-                self.log.emit(f"Groq 转写分段 {number}/{len(chunks)}（模�?{used_model}）�?)
+                self.log.emit(f"Groq 转写分段 {number}/{len(chunks)}（模型 {used_model}）…")
                 payload = self._groq_transcribe_file(chunk, key, used_model)
                 reason = self._groq_payload_is_suspicious(payload, chunk_dur)
                 if reason:
                     for alt in fallback_models:
                         if alt == used_model:
                             continue
-                        self.log.emit(f"Groq {used_model} 结果异常（{reason}），改用 {alt} 重试 �?)
+                        self.log.emit(f"Groq {used_model} 结果异常（{reason}），改用 {alt} 重试 …")
                         try:
                             payload = self._groq_transcribe_file(chunk, key, alt)
                             used_model = alt
@@ -1703,8 +1703,8 @@ class TranscribeWorker(QObject):
                     still_bad = self._groq_payload_is_suspicious(payload, chunk_dur)
                     if still_bad:
                         raise RuntimeError(
-                            f"Groq 识别结果异常（{still_bad}）�?
-                            "建议：设置里�?Groq 模型改为 whisper-large-v3，或改用本地 Whisper�?
+                            f"Groq 识别结果异常（{still_bad}）。"
+                            "建议：设置里把 Groq 模型改为 whisper-large-v3，或改用本地 Whisper。"
                         )
                 cache[chunk.name] = payload
                 cache["_model"] = used_model
@@ -1746,12 +1746,12 @@ class TranscribeWorker(QObject):
         if start.status_code >= 300:
             msg = response_error(start)
             if start.status_code == 429:
-                msg = "Gemini 配额已用尽（429）。请�?Google AI Studio 检查额�?账单，或改用 Groq / 本地 Whisper。\n" + msg
+                msg = "Gemini 配额已用尽（429）。请到 Google AI Studio 检查额度/账单，或改用 Groq / 本地 Whisper。\n" + msg
             raise ApiFailure(msg, start.status_code)
         upload_url = start.headers.get("x-goog-upload-url")
         if not upload_url:
             raise ApiFailure("Gemini 未返回上传地址")
-        self.log.emit("上传音频�?Gemini Files API �?)
+        self.log.emit("上传音频到 Gemini Files API …")
         with audio.open("rb") as handle:
             uploaded = requests.post(upload_url, headers={
                 "Content-Length": str(size), "X-Goog-Upload-Offset": "0",
@@ -1767,15 +1767,15 @@ class TranscribeWorker(QObject):
         file_name = file_info.get("name")
         if not file_uri:
             raise ApiFailure("Gemini 文件上传响应缺少 URI")
-        # 等待文件进入 ACTIVE，避免刚上传�?generate 失败
+        # 等待文件进入 ACTIVE，避免刚上传就 generate 失败
         for _ in range(30):
             if self.cancelled:
-                raise RuntimeError("任务已取�?)
+                raise RuntimeError("任务已取消")
             state = str(file_info.get("state") or "").upper()
             if state in ("ACTIVE", "STATE_ACTIVE", ""):
                 if state.startswith("ACTIVE") or state == "STATE_ACTIVE":
                     break
-                # 部分响应�?state 字段，直接继�?
+                # 部分响应无 state 字段，直接继续
                 if not state:
                     break
             if state in ("FAILED", "STATE_FAILED"):
@@ -1794,17 +1794,17 @@ class TranscribeWorker(QObject):
             except Exception:
                 break
         prompt = (
-            "请准确转写这段音频，并只输出标准 SRT 字幕（不�?Markdown、不要解释）。\n"
+            "请准确转写这段音频，并只输出标准 SRT 字幕（不要 Markdown、不要解释）。\n"
             "硬性要求：\n"
             "1) 保留原语言；\n"
-            "2) 必须是【词级】时间轴：每一�?SRT 只写一个词（或一个很短的语气词）�?
+            "2) 必须是【词级】时间轴：每一条 SRT 只写一个词（或一个很短的语气词），"
             "时间码必须对齐该词真实开口与收口，禁止把整句塞进一条；\n"
-            "3) 格式：序�?/ HH:MM:SS,mmm --> HH:MM:SS,mmm / 正文；\n"
+            "3) 格式：序号 / HH:MM:SS,mmm --> HH:MM:SS,mmm / 正文；\n"
             "4) 词与词之间时间连续、不重叠；静音处不要编造词。\n"
-            "若无法做到词级，也请尽量短切（每条≤2个词），时间码仍须贴合口播节奏�?
+            "若无法做到词级，也请尽量短切（每条≤2个词），时间码仍须贴合口播节奏。"
         )
         if self.language and self.language != "auto":
-            prompt += f"\n音频语言代码提示：{self.language}�?
+            prompt += f"\n音频语言代码提示：{self.language}。"
         body = {"contents": [{"parts": [{"text": prompt}, {"file_data": {
             "mime_type": mime, "file_uri": file_uri}}]}],
                 "generationConfig": {"temperature": 0.1}}
@@ -1820,7 +1820,7 @@ class TranscribeWorker(QObject):
             used_model = model_name
             last_err = ""
             for try_model in fallbacks:
-                self.log.emit(f"Gemini 正在生成带时间码字幕（{try_model}）�?)
+                self.log.emit(f"Gemini 正在生成带时间码字幕（{try_model}）…")
                 resp = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{try_model}:generateContent",
                     headers={"x-goog-api-key": key, "Content-Type": "application/json"},
@@ -1832,24 +1832,24 @@ class TranscribeWorker(QObject):
                     break
                 msg = response_error(resp)
                 last_err = msg
-                # 模型关停 / 不存在：换下一�?
+                # 模型关停 / 不存在：换下一个
                 if resp.status_code in (404, 400) and (
                     "not found" in msg.casefold()
                     or "not supported" in msg.casefold()
                     or "is not found" in msg.casefold()
                     or "no longer available" in msg.casefold()
                 ):
-                    self.log.emit(f"Gemini 模型「{try_model}」不可用，尝试下一型号�?)
+                    self.log.emit(f"Gemini 模型「{try_model}」不可用，尝试下一型号…")
                     continue
                 if resp.status_code == 429:
                     msg = (
                         "Gemini 配额已用尽（429）。免费额度用完后需开通计费，"
-                        "或暂时改用「本�?Whisper�?「Groq」。\n" + msg
+                        "或暂时改用「本地 Whisper」/「Groq」。\n" + msg
                     )
                 raise ApiFailure(msg, resp.status_code)
             if payload is None:
                 raise ApiFailure(
-                    f"Gemini 模型均不可用（已�?{', '.join(fallbacks)}）。\n{last_err}",
+                    f"Gemini 模型均不可用（已试 {', '.join(fallbacks)}）。\n{last_err}",
                     404,
                 )
             text = "\n".join(part.get("text", "") for cand in payload.get("candidates", [])
@@ -1878,16 +1878,16 @@ class TranscribeWorker(QObject):
                 "diarize": "true" if self.diarize else "false"}
         if self.language and self.language != "auto":
             data["language_code"] = self.language
-        self.log.emit(f"ElevenLabs Scribe 正在转写（{model_id}）�?)
+        self.log.emit(f"ElevenLabs Scribe 正在转写（{model_id}）…")
         with audio.open("rb") as handle:
             resp = requests.post("https://api.elevenlabs.io/v1/speech-to-text",
                                  headers={"xi-api-key": key}, data=data,
                                  files={"file": (audio.name, handle, "audio/wav")}, timeout=1800)
         if resp.status_code >= 300:
-            # scribe_v1 已退役时自动�?scribe_v2 再试一�?
+            # scribe_v1 已退役时自动改 scribe_v2 再试一次
             err = response_error(resp)
             if model_id != "scribe_v2" and resp.status_code in (400, 404, 422):
-                self.log.emit(f"ElevenLabs 模型「{model_id}」失败，改用 scribe_v2 重试�?)
+                self.log.emit(f"ElevenLabs 模型「{model_id}」失败，改用 scribe_v2 重试…")
                 data["model_id"] = "scribe_v2"
                 with audio.open("rb") as handle2:
                     resp = requests.post(
@@ -1909,7 +1909,7 @@ class TranscribeWorker(QObject):
 
     def _gladia(self, audio: Path, key: str):
         headers = {"x-gladia-key": key}
-        self.log.emit("上传音频�?Gladia �?)
+        self.log.emit("上传音频到 Gladia …")
         with audio.open("rb") as handle:
             uploaded = requests.post("https://api.gladia.io/v2/upload", headers=headers,
                                      files={"audio": (audio.name, handle, "audio/wav")}, timeout=1800)
@@ -1926,17 +1926,17 @@ class TranscribeWorker(QObject):
             raise ApiFailure(response_error(init), init.status_code)
         job = init.json()
         job_id = job.get("id")
-        # 新版返回 result_url（常�?/v2/transcription/{id}）；旧轮�?/v2/pre-recorded/{id} 会接口对不上
+        # 新版返回 result_url（常为 /v2/transcription/{id}）；旧轮询 /v2/pre-recorded/{id} 会接口对不上
         result_url = str(job.get("result_url") or "").strip()
         if not result_url and job_id:
             result_url = f"https://api.gladia.io/v2/transcription/{job_id}"
         self.log.emit(f"Gladia 任务已提交：{job_id}")
         for _ in range(720):
             if self.cancelled:
-                raise RuntimeError("任务已取�?)
+                raise RuntimeError("任务已取消")
             result = requests.get(result_url, headers=headers, timeout=30)
             if result.status_code == 404 and job_id and "/transcription/" in result_url:
-                # 兼容旧账号仍�?pre-recorded 路径
+                # 兼容旧账号仍用 pre-recorded 路径
                 result_url = f"https://api.gladia.io/v2/pre-recorded/{job_id}"
                 result = requests.get(result_url, headers=headers, timeout=30)
             if result.status_code >= 300:
@@ -1980,7 +1980,7 @@ def extract_google_id(value: str) -> str:
 def column_to_index(column: str) -> int:
     column = (column or "").strip().upper()
     if not re.fullmatch(r"[A-Z]{1,3}", column):
-        raise ValueError(f"无效的表格列：{column or '�?}")
+        raise ValueError(f"无效的表格列：{column or '空'}")
     result = 0
     for char in column: result = result * 26 + ord(char) - 64
     return result - 1
@@ -1998,27 +1998,27 @@ GOOGLE_SCOPES = ["https://www.googleapis.com/auth/drive", "https://www.googleapi
 
 def load_google_credentials(config, interactive=False):
     json_path = Path(config.get("json_path", ""))
-    if not json_path.is_file(): raise RuntimeError("Google 授权 JSON 文件不存在�?)
+    if not json_path.is_file(): raise RuntimeError("Google 授权 JSON 文件不存在。")
     try: payload = json.loads(json_path.read_text(encoding="utf-8-sig"))
     except Exception as exc: raise RuntimeError(f"Google JSON 无法读取：{exc}") from exc
     if payload.get("type") == "service_account":
         required = [name for name in ("client_email", "token_uri", "private_key") if not payload.get(name)]
         if required:
-            raise RuntimeError("服务账号 JSON 不完整，缺少�? + "�?.join(required))
+            raise RuntimeError("服务账号 JSON 不完整，缺少：" + "、".join(required))
         from google.oauth2 import service_account
         credentials = service_account.Credentials.from_service_account_info(payload, scopes=GOOGLE_SCOPES)
         return credentials, f"服务账号：{payload.get('client_email', '')}"
     client = payload.get("installed") or payload.get("web")
     if not client:
-        raise RuntimeError("无法识别�?JSON。请选择服务账号密钥，或 OAuth 桌面客户�?JSON�?)
+        raise RuntimeError("无法识别该 JSON。请选择服务账号密钥，或 OAuth 桌面客户端 JSON。")
     if not client.get("client_id") or not client.get("client_secret") or not client.get("token_uri"):
-        raise RuntimeError("OAuth 客户�?JSON 不完整，缺少 client_id、client_secret �?token_uri�?)
+        raise RuntimeError("OAuth 客户端 JSON 不完整，缺少 client_id、client_secret 或 token_uri。")
     try:
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from google_auth_oauthlib.flow import InstalledAppFlow
     except ImportError as exc:
-        raise RuntimeError("缺少 Google OAuth 授权组件，请到“设置与组件”一键安装�?) from exc
+        raise RuntimeError("缺少 Google OAuth 授权组件，请到“设置与组件”一键安装。") from exc
     token_path = config_dir() / "google_oauth_token.json"
     credentials = None
     if token_path.is_file():
@@ -2029,10 +2029,10 @@ def load_google_credentials(config, interactive=False):
         except Exception: credentials = None
     if not credentials or not credentials.valid:
         if not interactive:
-            raise RuntimeError("OAuth 尚未授权，请打开 Google 配置并点击“授�?检查权限”�?)
+            raise RuntimeError("OAuth 尚未授权，请打开 Google 配置并点击“授权/检查权限”。")
         flow = InstalledAppFlow.from_client_config(payload, GOOGLE_SCOPES)
         credentials = flow.run_local_server(port=0, open_browser=True,
-                                            success_message="视频工具合集 Google 授权成功，可以关闭此页面�?)
+                                            success_message="视频工具合集 Google 授权成功，可以关闭此页面。")
         token_path.write_text(credentials.to_json(), encoding="utf-8")
     return credentials, "OAuth 用户授权"
 
@@ -2041,7 +2041,7 @@ def test_google_authorization(config, interactive=True):
     try:
         from googleapiclient.discovery import build
     except ImportError as exc:
-        raise RuntimeError("缺少 Google API 组件，请到“设置与组件”一键安装�?) from exc
+        raise RuntimeError("缺少 Google API 组件，请到“设置与组件”一键安装。") from exc
     credentials, identity = load_google_credentials(config, interactive=interactive)
     drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
     drive.about().get(fields="user").execute()
@@ -2068,7 +2068,7 @@ class GoogleCloudSync:
         try:
             from googleapiclient.discovery import build
         except ImportError as exc:
-            raise RuntimeError("缺少 Google 云同步组件，请到“设置与组件”一键安装�?) from exc
+            raise RuntimeError("缺少 Google 云同步组件，请到“设置与组件”一键安装。") from exc
         credentials, identity = load_google_credentials(self.config, interactive=False)
         drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
         sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False)
@@ -2096,14 +2096,14 @@ class GoogleCloudSync:
                                    supportsAllDrives=True, includeItemsFromAllDrives=True).execute().get("files", [])
         if found:
             # 断点续传：同一个任务文件夹中已经存在该成品时直接复用云端文件，
-            # 不重新传输，也不会生成重名副本。表格仍使用真实 Drive 链接去重�?
+            # 不重新传输，也不会生成重名副本。表格仍使用真实 Drive 链接去重。
             existing = dict(found[0]); existing["_reused"] = True
             return existing
         request = drive.files().create(body={"name": path.name, "parents": [parent_id]}, media_body=media,
                                        fields="id,name,webViewLink", supportsAllDrives=True)
         response = None
         while response is None:
-            if self.cancelled(): raise RuntimeError("云端上传已停止；已上传的文件会保留，可稍后继续上传�?)
+            if self.cancelled(): raise RuntimeError("云端上传已停止；已上传的文件会保留，可稍后继续上传。")
             status, response = request.next_chunk()
             if status: self.log(f"上传 {path.name}：{round(status.progress() * 100)}%")
         return response
@@ -2120,25 +2120,25 @@ class GoogleCloudSync:
         spreadsheet_id = extract_google_id(self.config.get("spreadsheet_id", ""))
         sheet_name = self.config.get("sheet_name", "").strip()
         if not spreadsheet_id or not sheet_name:
-            raise RuntimeError("已开启表格写入，但表�?ID �?Sheet 名称为空�?)
+            raise RuntimeError("已开启表格写入，但表格 ID 或 Sheet 名称为空。")
         insert_row = max(1, int(self.config.get("insert_row", 4)))
         mappings = [dict(item) for item in self.config.get("sheet_mappings", DEFAULT_SHEET_MAPPINGS)
                     if str(item.get("column", "")).strip()]
         mappings += [{"field": item.get("field", "下拉字段"), "column": item.get("column", ""),
                       "source": "static", "value": item.get("selected", "")}
                      for item in self.config.get("variable_fields", []) if str(item.get("column", "")).strip()]
-        if not mappings: raise RuntimeError("表格列映射为空�?)
+        if not mappings: raise RuntimeError("表格列映射为空。")
         for item in mappings: item["column"] = item["column"].strip().upper()
         max_index = max(column_to_index(item["column"]) for item in mappings)
         file_mapping = next((item for item in mappings if item.get("source") == "file"), None)
-        if not file_mapping: raise RuntimeError("列映射中必须保留“文件名/链接”自动字段�?)
+        if not file_mapping: raise RuntimeError("列映射中必须保留“文件名/链接”自动字段。")
         file_col = file_mapping["column"]
         folder_mapping = next((item for item in mappings if item.get("source") == "folder"), None)
         quoted_sheet = "'" + sheet_name.replace("'", "''") + "'"
         existing_response = sheets.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id, range=f"{quoted_sheet}!{file_col}{insert_row}:{file_col}",
             valueRenderOption="FORMULA").execute()
-        # 文件链接是唯一值；同名文件可以存在，但同一个云端链接不会重复写入�?
+        # 文件链接是唯一值；同名文件可以存在，但同一个云端链接不会重复写入。
         existing = {}
         for offset, values in enumerate(existing_response.get("values", [])):
             value = str(values[0]) if values else ""
@@ -2146,9 +2146,9 @@ class GoogleCloudSync:
             link = match.group(1) if match else (value if value.lower().startswith(("http://","https://")) else "")
             if link: existing[link.strip().casefold()] = insert_row + offset
 
-        # Google Sheets �?B 列（或用户配置的文件链接列）也可能是富文本超链接�?
-        # Values API 只返回显示文字。额外读�?CellData，提�?hyperlink / textFormatRuns
-        # 中的真实 Drive URL，确保不会因为同名文件或显示文字而误判�?
+        # Google Sheets 的 B 列（或用户配置的文件链接列）也可能是富文本超链接，
+        # Values API 只返回显示文字。额外读取 CellData，提取 hyperlink / textFormatRuns
+        # 中的真实 Drive URL，确保不会因为同名文件或显示文字而误判。
         try:
             rich_response = sheets.spreadsheets().get(
                 spreadsheetId=spreadsheet_id,
@@ -2209,7 +2209,7 @@ class GoogleCloudSync:
             metadata = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id, fields="sheets.properties").execute()
             target = next((item["properties"] for item in metadata.get("sheets", [])
                            if item["properties"]["title"] == sheet_name), None)
-            if not target: raise RuntimeError(f"表格中没有找�?Sheet：{sheet_name}")
+            if not target: raise RuntimeError(f"表格中没有找到 Sheet：{sheet_name}")
             sheets.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": [{
                 "insertDimension": {"range": {"sheetId": target["sheetId"], "dimension": "ROWS",
                                                 "startIndex": insert_row - 1,
@@ -2225,14 +2225,14 @@ class GoogleCloudSync:
     def run(self, final_dir: Path, records, source_paths, selected_files=None):
         drive, sheets, email = self._services()
         parent_id = extract_google_id(self.config.get("parent_folder", ""))
-        if not parent_id: raise RuntimeError("Google Drive 父文件夹 ID 或链接无效�?)
+        if not parent_id: raise RuntimeError("Google Drive 父文件夹 ID 或链接无效。")
         self.log(f"Google JSON 授权成功：{email}")
         date_folder = self._find_or_create_folder(drive, datetime.now().strftime("%Y-%m-%d"), parent_id)
-        if self.config.get("folder_mode") == "自定义名�?:
+        if self.config.get("folder_mode") == "自定义名称":
             task_name = self.config.get("custom_folder_name", "").strip()
         else:
             first = Path(source_paths[0]).stem if source_paths else final_dir.name
-            task_name = first if len(source_paths) <= 1 else f"{first}_等{len(source_paths)}个视�?
+            task_name = first if len(source_paths) <= 1 else f"{first}_等{len(source_paths)}个视频"
         task_name = re.sub(r'[\\/:*?"<>|]+', "_", task_name).strip() or final_dir.name
         task_folder = self._find_or_create_folder(drive, task_name, date_folder)
         if self.config.get("public_link"):
@@ -2243,9 +2243,9 @@ class GoogleCloudSync:
         uploaded = []; reused_count = 0; uploaded_count = 0
         final_files = sorted((Path(path) for path in selected_files), key=lambda path: rename_natural_key(path.name)) if selected_files else sorted((path for path in final_dir.iterdir() if path.is_file()),
                              key=lambda path: rename_natural_key(path.name))
-        self.log(f"只上传重命名成品：共 {len(final_files)} 个文�?)
+        self.log(f"只上传重命名成品：共 {len(final_files)} 个文件")
         for number, path in enumerate(final_files, 1):
-            if self.cancelled(): raise RuntimeError("云端上传已停止；可以稍后点击继续上传�?)
+            if self.cancelled(): raise RuntimeError("云端上传已停止；可以稍后点击继续上传。")
             response = self._upload_file(drive, path, task_folder)
             if response.get("_reused"):
                 reused_count += 1
@@ -2259,23 +2259,23 @@ class GoogleCloudSync:
                              "original": source_record.get("original", "")})
             if not response.get("_reused"):
                 self.log(f"云端上传完成 {number}/{len(final_files)}：{path.name}")
-        sheet_note = "未开启表格写�?
+        sheet_note = "未开启表格写入"
         if self.config.get("write_sheet"):
             try:
                 added, updated = self._write_sheet(sheets, uploaded, folder_url)
-                sheet_note = f"表格新增 {added} 行，跳过已存在链�?{updated} �?
+                sheet_note = f"表格新增 {added} 行，跳过已存在链接 {updated} 行"
             except Exception as exc:
                 raise SheetWritePendingError(folder_url, uploaded, exc) from exc
-        return folder_url, f"新上�?{uploaded_count} 个，复用云端已有 {reused_count} 个；{sheet_note}"
+        return folder_url, f"新上传 {uploaded_count} 个，复用云端已有 {reused_count} 个；{sheet_note}"
 
     def write_sheet_only(self, uploaded, folder_url):
         _drive, sheets, email = self._services()
-        self.log(f"复用已上传文件，不重新上传视频（{email}�?)
+        self.log(f"复用已上传文件，不重新上传视频（{email}）")
         normalized=[]
         for item in uploaded:
             value=dict(item); value["path"]=Path(value.get("path","")); normalized.append(value)
         added, skipped=self._write_sheet(sheets,normalized,folder_url)
-        return f"继续填表完成：新�?{added} 行，跳过已存在链�?{skipped} �?
+        return f"继续填表完成：新增 {added} 行，跳过已存在链接 {skipped} 行"
 
 
 class PipelineWorker(QObject):
@@ -2307,14 +2307,14 @@ class PipelineWorker(QObject):
         self.cancelled = True
 
     def _polish_finals(self, final_dir: Path, final_records: list):
-        """后处理与 Reels 一致：9:16 全屏水印；声�?仅原�?�?原声+BGM（支持曲库随机截取）�?""
-        audio_mode = str(self.extras.get("audio_mode") or "仅视频原�?)
+        """后处理与 Reels 一致：9:16 全屏水印；声音=仅原声 或 原声+BGM（支持曲库随机截取）。"""
+        audio_mode = str(self.extras.get("audio_mode") or "仅视频原声")
         bgm_root = Path(str(self.extras.get("bgm_path") or ""))
         wm = Path(str(self.extras.get("watermark_path") or ""))
         want_bgm = "背景" in audio_mode or "BGM" in audio_mode.upper()
         use_wm = bool(self.extras.get("watermark_enabled")) and wm.is_file()
         randomize_bgm = bool(self.extras.get("bgm_random", True))
-        # 解析曲库：单文件 / 文件�?
+        # 解析曲库：单文件 / 文件夹
         try:
             from modules.dynamic_caption_page import find_bgm_file, random_bgm_start_ms, media_duration
         except Exception:
@@ -2341,10 +2341,10 @@ class PipelineWorker(QObject):
         use_bgm_any = want_bgm and (sample_bgm is not None or bgm_root.is_file() or bgm_root.is_dir())
         if not use_bgm_any and not use_wm:
             if want_bgm:
-                self.log.emit("提醒：已选「原声＋背景音乐」但未找到可�?BGM 文件/文件夹，按仅原声输出�?)
+                self.log.emit("提醒：已选「原声＋背景音乐」但未找到可用 BGM 文件/文件夹，按仅原声输出。")
             return
         if want_bgm and not sample_bgm and not bgm_root.is_file():
-            self.log.emit(f"提醒：BGM 路径无效：{bgm_root}，跳过混音（仍可烧水印）�?)
+            self.log.emit(f"提醒：BGM 路径无效：{bgm_root}，跳过混音（仍可烧水印）。")
             use_bgm_any = False
         if not use_bgm_any and not use_wm:
             return
@@ -2355,7 +2355,7 @@ class PipelineWorker(QObject):
         creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         for index, rec in enumerate(final_records, 1):
             if self.cancelled:
-                raise RuntimeError("任务已取�?)
+                raise RuntimeError("任务已取消")
             src = Path(rec["path"])
             if not src.is_file():
                 continue
@@ -2363,7 +2363,7 @@ class PipelineWorker(QObject):
             use_bgm = bool(bgm_file and Path(bgm_file).is_file())
             if want_bgm and not use_bgm:
                 self.log.emit(f"提醒：{src.name} 未匹配到 BGM，本条仅原声"
-                              + ("＋水�? if use_wm else "") + "�?)
+                              + ("＋水印" if use_wm else "") + "。")
             if not use_bgm and not use_wm:
                 continue
             tmp = src.with_name(src.stem + "._polish_tmp.mp4")
@@ -2378,7 +2378,7 @@ class PipelineWorker(QObject):
             v_label = "0:v"
             if use_wm:
                 cmd += ["-i", str(wm)]
-                # 固定 9:16 全屏覆盖：水印强制对齐主画面尺寸�?0,0 叠加
+                # 固定 9:16 全屏覆盖：水印强制对齐主画面尺寸后 0,0 叠加
                 filter_parts.append(
                     f"[0:v]setpts=PTS-STARTPTS[base];"
                     f"[{next_in}:v]format=rgba,colorchannelmixer=aa={wm_op:.3f}[wmraw];"
@@ -2388,7 +2388,7 @@ class PipelineWorker(QObject):
                 v_label = "vout"
                 next_in += 1
             if use_bgm:
-                # 随机起点截取后循环铺满视频时长（loop �?-i 前；-ss 跟在 loop 后）
+                # 随机起点截取后循环铺满视频时长（loop 在 -i 前；-ss 跟在 loop 后）
                 cmd += ["-stream_loop", "-1"]
                 if bgm_offset_ms > 0:
                     cmd += ["-ss", f"{bgm_offset_ms / 1000:.3f}"]
@@ -2423,7 +2423,7 @@ class PipelineWorker(QObject):
                     bgm_note += f"@{bgm_offset_ms/1000:.1f}s"
             self.log.emit(
                 f"成品润色 {index}/{len(final_records)}：{src.name}"
-                f"｜声�?{audio_mode}"
+                f"｜声音={audio_mode}"
                 + bgm_note
                 + (f"｜全屏水印{int(wm_op*100)}%" if use_wm else "")
             )
@@ -2436,10 +2436,10 @@ class PipelineWorker(QObject):
                     src.unlink(missing_ok=True)
                     tmp.replace(src)
                 except OSError as exc:
-                    self.log.emit(f"提醒：替换成品失�?{src.name}：{exc}")
+                    self.log.emit(f"提醒：替换成品失败 {src.name}：{exc}")
             else:
                 err = (result.stdout or "")[-500:]
-                self.log.emit(f"提醒：润色跳�?{src.name}：{err or '编码失败'}")
+                self.log.emit(f"提醒：润色跳过 {src.name}：{err or '编码失败'}")
                 try:
                     tmp.unlink(missing_ok=True)
                 except OSError:
@@ -2490,12 +2490,12 @@ class PipelineWorker(QObject):
         try:
             from scenedetect import ContentDetector, detect
         except ImportError as exc:
-            raise RuntimeError("缺少智能场景检测组�?scenedetect，请到“设置与组件”一键安装�?) from exc
+            raise RuntimeError("缺少智能场景检测组件 scenedetect，请到“设置与组件”一键安装。") from exc
         clips = []
         creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         for source_number, source_text in enumerate(self.sources, 1):
             source = Path(source_text)
-            if self.cancelled: raise RuntimeError("任务已取�?)
+            if self.cancelled: raise RuntimeError("任务已取消")
             source_key = stable_key(source_signature(source_text))
             completed_names = self.state.setdefault("cut_completed", {}).get(source_key, [])
             completed_paths = [clips_dir / name for name in completed_names]
@@ -2529,10 +2529,10 @@ class PipelineWorker(QObject):
                 output_audio = probe_audio_layout(self.ffmpeg, str(destination))
                 if source_audio and output_audio != source_audio:
                     raise RuntimeError(
-                        f"音轨校验失败：{source.name} �?{source_audio[1]}�?
-                        f"但片�?{destination.name} �?{output_audio[1]}。已停止以避免改变声道�?)
+                        f"音轨校验失败：{source.name} 为 {source_audio[1]}，"
+                        f"但片段 {destination.name} 为 {output_audio[1]}。已停止以避免改变声道。")
                 clips.append(destination)
-                audio_note = f"；音轨保�?{output_audio[1]} / {output_audio[0]}Hz" if output_audio else ""
+                audio_note = f"；音轨保持 {output_audio[1]} / {output_audio[0]}Hz" if output_audio else ""
                 self.log.emit(f"已生成片段：{destination.name}{audio_note}")
             source_clips = [path.name for path in clips if path.name.startswith(f"{source_number:03d}_")]
             self.state["cut_completed"][source_key] = source_clips
@@ -2549,14 +2549,14 @@ class PipelineWorker(QObject):
             saved_clips = [clips_dir / name for name in self.state.get("clips", [])]
             if saved_clips and all(path.exists() for path in saved_clips):
                 clips = saved_clips
-                self.log.emit(f"断点续接：剪辑阶段已完成，直接使�?{len(clips)} 个片段�?)
+                self.log.emit(f"断点续接：剪辑阶段已完成，直接使用 {len(clips)} 个片段。")
                 self.progress.emit(30)
             else:
                 clips = self._cut_sources(clips_dir)
                 self.state["clips"] = [path.name for path in clips]
                 self.state["stage"] = "subtitles"
                 self._save_checkpoint()
-            if not clips: raise RuntimeError("没有生成任何视频片段�?)
+            if not clips: raise RuntimeError("没有生成任何视频片段。")
             transcriber = TranscribeWorker(self.store, self.provider, self.model, [],
                                            str(run_root / ".transcription_work"),
                                            self.language, False, self.ffmpeg, True)
@@ -2567,7 +2567,7 @@ class PipelineWorker(QObject):
             transcriber.result_ready.connect(capture)
             titles, transcript_records = [], []
             for index, clip in enumerate(clips, 1):
-                if self.cancelled: raise RuntimeError("任务已取�?)
+                if self.cancelled: raise RuntimeError("任务已取消")
                 cached = self.state.setdefault("transcripts", {}).get(clip.name)
                 if cached:
                     captured.clear(); captured.update(name=clip.name, original=cached.get("original", ""),
@@ -2592,14 +2592,14 @@ class PipelineWorker(QObject):
                                            "chinese": captured["chinese"], "srt": captured["srt"]})
                 (subtitles_dir / f"{clip.stem}.srt").write_text(captured["srt"], encoding="utf-8-sig")
                 bilingual = f"【原文】\n{captured['original']}\n\n【简体中文】\n{captured['chinese']}"
-                (subtitles_dir / f"{clip.stem}_中外文对�?txt").write_text(bilingual, encoding="utf-8-sig")
+                (subtitles_dir / f"{clip.stem}_中外文对照.txt").write_text(bilingual, encoding="utf-8-sig")
                 self.result_ready.emit(clip.name, captured["original"], captured["chinese"], captured["srt"])
                 self.progress.emit(30 + round(index / len(clips) * 60))
 
             self.state["stage"] = "rename"
             self._save_checkpoint()
 
-            task = RenameTask(str(clips_dir), str(run_root), "03_重命名成�?, self.prefix,
+            task = RenameTask(str(clips_dir), str(run_root), "03_重命名成品", self.prefix,
                               "\n".join(titles), self.date_text, self.suffix,
                               self.start_index, self.padding, True)
             final_dir = task.output_folder(); final_dir.mkdir(parents=True, exist_ok=True)
@@ -2611,7 +2611,7 @@ class PipelineWorker(QObject):
                 saved_destination = self.state.setdefault("renamed", {}).get(source.name)
                 if saved_destination and (final_dir / saved_destination).exists():
                     destination = final_dir / saved_destination
-                    self.log.emit(f"断点续接：跳过已完成重命�?{offset + 1}/{len(ordered)}：{destination.name}")
+                    self.log.emit(f"断点续接：跳过已完成重命名 {offset + 1}/{len(ordered)}：{destination.name}")
                 elif destination.exists():
                     self.log.emit(f"断点续接：检测到已复制成品，登记并跳过：{destination.name}")
                     self.state["renamed"][source.name] = destination.name
@@ -2633,7 +2633,7 @@ class PipelineWorker(QObject):
             self._save_checkpoint()
             self.titles_ready.emit(str(clips_dir), titles)
             if self.cloud_config.get("enabled"):
-                self.progress.emit(92); self.log.emit("开�?Google 云端同步（仅重命名成品）�?)
+                self.progress.emit(92); self.log.emit("开始 Google 云端同步（仅重命名成品）…")
                 try:
                     folder_url, cloud_summary = GoogleCloudSync(
                         self.cloud_config, self.log.emit, lambda: self.cancelled).run(
@@ -2657,7 +2657,7 @@ class PipelineWorker(QObject):
                     self.state["last_error"] = str(cloud_exc)
                     self._save_checkpoint()
             else:
-                folder_url = ""; cloud_summary = "云端同步已关�?
+                folder_url = ""; cloud_summary = "云端同步已关闭"
                 self.state["status"] = "completed"
                 self._save_checkpoint()
             self.progress.emit(100)
@@ -2689,7 +2689,7 @@ class CloudUploadWorker(QObject):
 
     def run(self):
         try:
-            if not self.files: raise RuntimeError("没有选择需要上传的成品文件�?)
+            if not self.files: raise RuntimeError("没有选择需要上传的成品文件。")
             folder_url, summary = GoogleCloudSync(
                 self.config, self.log.emit, lambda: self.cancelled).run(
                 self.files[0].parent, self.records, self.source_paths, self.files)
@@ -2740,7 +2740,7 @@ class ToolCard(QFrame):
         desc = QLabel(description)
         desc.setWordWrap(True)
         desc.setStyleSheet("color:#a9b8cb;line-height:1.45;")
-        button = QPushButton("进入  �?)
+        button = QPushButton("进入  →")
         button.clicked.connect(lambda: self.clicked.emit(self.path))
         layout.addLayout(header)
         layout.addWidget(desc)
@@ -2762,7 +2762,7 @@ class GoogleAuthWorker(QObject):
 
 
 class GoogleSheetReadWorker(QObject):
-    """读取工作表名称，或按配置表列读取去重后的下拉选项�?""
+    """读取工作表名称，或按配置表列读取去重后的下拉选项。"""
     finished = Signal(bool, object, str)
 
     def __init__(self, config, mode):
@@ -2774,17 +2774,17 @@ class GoogleSheetReadWorker(QObject):
             credentials, identity = load_google_credentials(self.config, interactive=False)
             service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
             spreadsheet_id = extract_google_id(self.config.get("spreadsheet_id", ""))
-            if not spreadsheet_id: raise RuntimeError("请先填写有效�?Google 表格 ID 或链接�?)
+            if not spreadsheet_id: raise RuntimeError("请先填写有效的 Google 表格 ID 或链接。")
             metadata = service.spreadsheets().get(
                 spreadsheetId=spreadsheet_id, fields="sheets.properties.title").execute()
             sheet_names = [item.get("properties", {}).get("title", "") for item in metadata.get("sheets", [])]
             sheet_names = [name for name in sheet_names if name]
             if self.mode == "sheets":
-                self.finished.emit(True, sheet_names, f"已读�?{len(sheet_names)} �?Sheet（{identity}�?)
+                self.finished.emit(True, sheet_names, f"已读取 {len(sheet_names)} 个 Sheet（{identity}）")
                 return
             source_sheet = self.config.get("option_sheet_name", "").strip()
-            if not source_sheet: raise RuntimeError("请选择用于读取下拉选项的配�?Sheet�?)
-            if source_sheet not in sheet_names: raise RuntimeError(f"表格中没有找到配�?Sheet：{source_sheet}")
+            if not source_sheet: raise RuntimeError("请选择用于读取下拉选项的配置 Sheet。")
+            if source_sheet not in sheet_names: raise RuntimeError(f"表格中没有找到配置 Sheet：{source_sheet}")
             start_row = max(1, int(self.config.get("option_start_row", 2)))
             quoted = "'" + source_sheet.replace("'", "''") + "'"
             result = {}
@@ -2801,13 +2801,13 @@ class GoogleSheetReadWorker(QObject):
                     key=value.casefold()
                     if value and key not in seen: values.append(value); seen.add(key)
                 result[item.get("field", source_column)] = values
-            self.finished.emit(True, result, f"已从“{source_sheet}”读�?{sum(len(v) for v in result.values())} 个去重选项")
+            self.finished.emit(True, result, f"已从“{source_sheet}”读取 {sum(len(v) for v in result.values())} 个去重选项")
         except Exception as exc:
             self.finished.emit(False, {}, str(exc))
 
 
 class PasteOptionsTable(QTableWidget):
-    """支持�?Excel/Google Sheets 的多行、多列内容直接粘贴进选项网格�?""
+    """支持把 Excel/Google Sheets 的多行、多列内容直接粘贴进选项网格。"""
     def keyPressEvent(self, event):
         if event.matches(QKeySequence.StandardKey.Paste):
             text=QApplication.clipboard().text().replace("\r\n","\n").replace("\r","\n")
@@ -2826,7 +2826,7 @@ class PasteOptionsTable(QTableWidget):
 
 
 class NoWheelComboBox(QComboBox):
-    """与全局策略一致：未获焦点时滚轮不改值，便于页面滚动�?""
+    """与全局策略一致：未获焦点时滚轮不改值，便于页面滚动。"""
 
     def wheelEvent(self, event):
         if self.hasFocus():
@@ -2836,12 +2836,12 @@ class NoWheelComboBox(QComboBox):
 
 
 class FocusOnlyWheelFilter(QObject):
-    """全局防误触：下拉�?/ 数字�?/ 滑条仅在点击获得焦点后才响应滚轮�?
+    """全局防误触：下拉框 / 数字框 / 滑条仅在点击获得焦点后才响应滚轮。
 
-    �?Reels 编辑器一致；未聚焦时把滚轮交给外层滚动区域，避免滚动页面时改参数�?
+    与 Reels 编辑器一致；未聚焦时把滚轮交给外层滚动区域，避免滚动页面时改参数。
 
-    注意：不可对正在处理的同一 QWheelEvent �?sendEvent 转发——Win11/Qt6 会报
-    CE_INVALIDATED，严重时卡死；应直接�?QScrollBar 数值�?
+    注意：不可对正在处理的同一 QWheelEvent 再 sendEvent 转发——Win11/Qt6 会报
+    CE_INVALIDATED，严重时卡死；应直接改 QScrollBar 数值。
     """
 
     _CONTROL_TYPES = (QComboBox, QAbstractSpinBox, QSlider)
@@ -2859,12 +2859,12 @@ class FocusOnlyWheelFilter(QObject):
             except Exception:
                 pass
             if control.hasFocus():
-                return False  # 已聚焦：允许改�?
-            # 未聚焦：拦截改值，并手动滚动外层区�?
+                return False  # 已聚焦：允许改值
+            # 未聚焦：拦截改值，并手动滚动外层区域
             self._scroll_enclosing(control, event)
             return True
         except Exception:
-            # eventFilter 里绝不能抛到 Qt（会�?Error calling Python override�?
+            # eventFilter 里绝不能抛到 Qt（会刷 Error calling Python override）
             return False
 
     @classmethod
@@ -2887,7 +2887,7 @@ class FocusOnlyWheelFilter(QObject):
 
     @classmethod
     def _scroll_enclosing(cls, widget, event):
-        """用滚�?delta 直接驱动外层 QScrollArea，避�?sendEvent 重入�?""
+        """用滚轮 delta 直接驱动外层 QScrollArea，避免 sendEvent 重入。"""
         scroll = cls._enclosing_scroll(widget)
         if scroll is None:
             return
@@ -2902,7 +2902,7 @@ class FocusOnlyWheelFilter(QObject):
             dy = int(pixel.y())
         if dx == 0 and pixel is not None:
             dx = int(pixel.x())
-        # 竖向优先；Shift+滚轮常见为横�?
+        # 竖向优先；Shift+滚轮常见为横向
         def _apply(bar, delta):
             if bar is None or not bar.isEnabled() or not delta:
                 return
@@ -2917,23 +2917,23 @@ class FocusOnlyWheelFilter(QObject):
 
 
 def apply_click_focus_to_wheel_controls(root: QWidget) -> None:
-    """把已有控件设为点击后才聚焦，配合 FocusOnlyWheelFilter�?""
+    """把已有控件设为点击后才聚焦，配合 FocusOnlyWheelFilter。"""
     for cls in (QComboBox, QAbstractSpinBox, QSlider):
         for widget in root.findChildren(cls):
             widget.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
 
 class VariableOptionsDialog(QDialog):
-    """以“字段为列、选项为行”的方式批量维护本地上传选项�?""
+    """以“字段为列、选项为行”的方式批量维护本地上传选项。"""
     def __init__(self, fields, parent=None):
         super().__init__(parent); self.fields=[dict(item) for item in fields]
         self.setWindowTitle("配置下拉字段和选项"); self.resize(1040,620)
         root=QVBoxLayout(self); root.setContentsMargins(12,12,12,10); root.setSpacing(8)
-        hint=QLabel("每一列对应一个上传字段。选中列下方的第一个空格后，可直接粘贴多行数据；也支持一次粘贴多列。保存时会自动删除空白和重复项�?)
+        hint=QLabel("每一列对应一个上传字段。选中列下方的第一个空格后，可直接粘贴多行数据；也支持一次粘贴多列。保存时会自动删除空白和重复项。")
         hint.setWordWrap(True); hint.setStyleSheet("color:#7dd3fc;"); root.addWidget(hint)
         max_rows=max([len(item.get("options",[])) for item in self.fields]+[8])
         self.table=PasteOptionsTable(max_rows+3,len(self.fields))
-        self.table.setHorizontalHeaderLabels([f"{item.get('field','字段')}\n（写�?{item.get('column','')} 列）" for item in self.fields])
+        self.table.setHorizontalHeaderLabels([f"{item.get('field','字段')}\n（写入 {item.get('column','')} 列）" for item in self.fields])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(30)
         self.table.setAlternatingRowColors(False); self.table.setSelectionMode(QAbstractItemView.SelectionMode.ContiguousSelection)
@@ -2947,8 +2947,8 @@ class VariableOptionsDialog(QDialog):
             for row,value in enumerate(item.get("options",[])):
                 self.table.setItem(row,column,QTableWidgetItem(str(value)))
         root.addWidget(self.table,1)
-        actions=QHBoxLayout(); add_rows=QPushButton("增加 10 �?); add_rows.clicked.connect(lambda:self.table.setRowCount(self.table.rowCount()+10))
-        clear_column=QPushButton("清空选中�?); clear_column.clicked.connect(self._clear_selected_columns)
+        actions=QHBoxLayout(); add_rows=QPushButton("增加 10 行"); add_rows.clicked.connect(lambda:self.table.setRowCount(self.table.rowCount()+10))
+        clear_column=QPushButton("清空选中列"); clear_column.clicked.connect(self._clear_selected_columns)
         actions.addWidget(add_rows); actions.addWidget(clear_column); actions.addStretch(); root.addLayout(actions)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Save).setText("保存选项")
@@ -2973,22 +2973,22 @@ class VariableOptionsDialog(QDialog):
 
 
 class GoogleSettingsPanel(QWidget):
-    """常驻�?Google Drive / Sheets 多方案编辑器�?""
+    """常驻的 Google Drive / Sheets 多方案编辑器。"""
     profiles_changed = Signal()
 
     def __init__(self, store):
         super().__init__(); self.store = store; self.auth_thread = None; self.auth_worker = None
         self.sheet_thread = None; self.sheet_worker = None; self._loaded_options = {}; self._variable_selected = {}; self._available_sheet_names = []
         self._build(); self.load_current()
-        # 授权成功后直接复用本�?OAuth token / 服务账号，不要求每次启动重新点击检查�?
+        # 授权成功后直接复用本地 OAuth token / 服务账号，不要求每次启动重新点击检查。
 
     def _build(self):
-        # 与「组�?/ 字体 / 密钥」分区统一：外边距、标题、副标题风格
+        # 与「组件 / 字体 / 密钥」分区统一：外边距、标题、副标题风格
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 16, 24, 16)
         root.setSpacing(8)
         top = QHBoxLayout()
-        title = QLabel("�?Google Drive / Sheets 授权与同步方�?)
+        title = QLabel("☁ Google Drive / Sheets 授权与同步方案")
         title.setObjectName("heading")
         top.addWidget(title)
         top.addStretch()
@@ -2996,7 +2996,7 @@ class GoogleSettingsPanel(QWidget):
         self.profile.setEditable(True)
         self.profile.setMinimumWidth(210)
         self.profile.currentTextChanged.connect(self.load_profile)
-        save = QPushButton("保存为当前方�?)
+        save = QPushButton("保存为当前方案")
         save.setObjectName("primary")
         save.clicked.connect(self.save_profile)
         delete = QPushButton("删除方案")
@@ -3007,8 +3007,8 @@ class GoogleSettingsPanel(QWidget):
         top.addWidget(delete)
         root.addLayout(top)
         hint = QLabel(
-            "把授权、Drive 文件夹、表格、Sheet、固定列和上传时选择项保存在同一方案�?
-            "流水�?/ Reels 开始前只需选择方案�?
+            "把授权、Drive 文件夹、表格、Sheet、固定列和上传时选择项保存在同一方案。"
+            "流水线 / Reels 开始前只需选择方案。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#94a3b8;font-size:13px;")
@@ -3022,30 +3022,30 @@ class GoogleSettingsPanel(QWidget):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 4, 8, 8)
         body_layout.setSpacing(10)
-        auth = QGroupBox("🔐 授权�?Drive"); auth_form = QFormLayout(auth)
+        auth = QGroupBox("🔐 授权与 Drive"); auth_form = QFormLayout(auth)
         auth_form.setContentsMargins(12, 12, 12, 12); auth_form.setSpacing(8)
-        json_row = QHBoxLayout(); self.json_path = QLineEdit(); json_row.addWidget(self.json_path); browse = QPushButton("选择 JSON�?)
+        json_row = QHBoxLayout(); self.json_path = QLineEdit(); json_row.addWidget(self.json_path); browse = QPushButton("选择 JSON…")
         browse.clicked.connect(self.choose_json); json_row.addWidget(browse); auth_form.addRow("服务账号 / OAuth JSON", json_row)
-        self.parent_folder = QLineEdit(); self.parent_folder.setPlaceholderText("Drive 父文件夹 ID 或链�?); auth_form.addRow("父文件夹", self.parent_folder)
-        self.folder_mode = QComboBox(); self.folder_mode.addItems(["视频名称", "自定义名�?]); self.custom_folder = QLineEdit()
+        self.parent_folder = QLineEdit(); self.parent_folder.setPlaceholderText("Drive 父文件夹 ID 或链接"); auth_form.addRow("父文件夹", self.parent_folder)
+        self.folder_mode = QComboBox(); self.folder_mode.addItems(["视频名称", "自定义名称"]); self.custom_folder = QLineEdit()
         mode_row = QHBoxLayout(); mode_row.addWidget(self.folder_mode); mode_row.addWidget(self.custom_folder, 1); auth_form.addRow("云端目录命名", mode_row)
-        auth_row = QHBoxLayout(); self.auth_status = QLabel("尚未检�?); self.auth_status.setWordWrap(True); self.auth_button = QPushButton("授权 / 重新检�?)
-        self.auth_button.clicked.connect(lambda: self.check_auth(True)); auth_row.addWidget(self.auth_status, 1); auth_row.addWidget(self.auth_button); auth_form.addRow("权限状�?, auth_row)
+        auth_row = QHBoxLayout(); self.auth_status = QLabel("尚未检查"); self.auth_status.setWordWrap(True); self.auth_button = QPushButton("授权 / 重新检查")
+        self.auth_button.clicked.connect(lambda: self.check_auth(True)); auth_row.addWidget(self.auth_status, 1); auth_row.addWidget(self.auth_button); auth_form.addRow("权限状态", auth_row)
         self.public_link = QCheckBox("允许知道链接的用户查看任务文件夹"); auth_form.addRow("共享", self.public_link); body_layout.addWidget(auth)
         sheet = QGroupBox("📊 Google Sheets 写入"); sheet_form = QFormLayout(sheet)
         sheet_form.setContentsMargins(12, 12, 12, 12); sheet_form.setSpacing(8)
-        self.write_sheet = QCheckBox("上传完成后写入表�?); sheet_form.addRow("启用", self.write_sheet)
-        self.spreadsheet = QLineEdit(); self.spreadsheet.setPlaceholderText("表格 ID 或完整链�?)
+        self.write_sheet = QCheckBox("上传完成后写入表格"); sheet_form.addRow("启用", self.write_sheet)
+        self.spreadsheet = QLineEdit(); self.spreadsheet.setPlaceholderText("表格 ID 或完整链接")
         spreadsheet_row = QHBoxLayout(); spreadsheet_row.addWidget(self.spreadsheet, 1)
         self.read_sheets_button = QPushButton("读取 Sheet 名称"); self.read_sheets_button.clicked.connect(self.read_sheet_names); spreadsheet_row.addWidget(self.read_sheets_button)
         self.sheet_name = QComboBox(); self.sheet_name.setEditable(True); self.sheet_name.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.sheet_name.lineEdit().setPlaceholderText("选择或直接输入写入目�?Sheet")
+        self.sheet_name.lineEdit().setPlaceholderText("选择或直接输入写入目标 Sheet")
         self.insert_row = QSpinBox(); self.insert_row.setRange(1,100000); self.insert_row.setValue(4)
-        sheet_form.addRow("表格 ID", spreadsheet_row); sheet_form.addRow("写入 Sheet", self.sheet_name); sheet_form.addRow("数据起始�?, self.insert_row)
+        sheet_form.addRow("表格 ID", spreadsheet_row); sheet_form.addRow("写入 Sheet", self.sheet_name); sheet_form.addRow("数据起始行", self.insert_row)
         body_layout.addWidget(sheet)
         mapping_group = QGroupBox("🗂 固定字段与列映射"); mapping_layout = QVBoxLayout(mapping_group)
         mapping_layout.setContentsMargins(12, 12, 12, 12)
-        self.mapping_table = QTableWidget(0, 4); self.mapping_table.setHorizontalHeaderLabels(["字段名称", "写入�?, "类型", "固定内容"])
+        self.mapping_table = QTableWidget(0, 4); self.mapping_table.setHorizontalHeaderLabels(["字段名称", "写入列", "类型", "固定内容"])
         self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.mapping_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -3053,11 +3053,11 @@ class GoogleSettingsPanel(QWidget):
         mapping_layout.addWidget(self.mapping_table); mbuttons = QHBoxLayout(); madd = QPushButton("新增固定字段"); madd.clicked.connect(self.add_mapping)
         mdel = QPushButton("删除选中"); mdel.clicked.connect(lambda: self.remove_rows(self.mapping_table)); mbuttons.addWidget(madd); mbuttons.addWidget(mdel); mbuttons.addStretch(); mapping_layout.addLayout(mbuttons)
         body_layout.addWidget(mapping_group)
-        variable_group = QGroupBox("�?本次上传可选择字段"); variable_layout = QVBoxLayout(variable_group)
+        variable_group = QGroupBox("☑ 本次上传可选择字段"); variable_layout = QVBoxLayout(variable_group)
         variable_layout.setContentsMargins(12, 12, 12, 12)
-        variable_hint=QLabel("字段名称和写入列在下表维护；具体选项在独立窗口中按列批量粘贴�?)
+        variable_hint=QLabel("字段名称和写入列在下表维护；具体选项在独立窗口中按列批量粘贴。")
         variable_hint.setStyleSheet("color:#94a3b8;font-size:12px;"); variable_layout.addWidget(variable_hint)
-        self.variable_table = QTableWidget(0, 3); self.variable_table.setHorizontalHeaderLabels(["字段名称", "写入�?, "可选项数量"])
+        self.variable_table = QTableWidget(0, 3); self.variable_table.setHorizontalHeaderLabels(["字段名称", "写入列", "可选项数量"])
         self.variable_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         self.variable_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
         self.variable_table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents); self.variable_table.setMinimumHeight(180)
@@ -3070,7 +3070,7 @@ class GoogleSettingsPanel(QWidget):
 
     def choose_json(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择 Google 授权 JSON", "", "JSON (*.json)")
-        if path: self.json_path.setText(path); self.auth_status.setText("授权文件已变更，等待检�?)
+        if path: self.json_path.setText(path); self.auth_status.setText("授权文件已变更，等待检查")
 
     def read_sheet_names(self):
         self._start_sheet_read("sheets")
@@ -3078,7 +3078,7 @@ class GoogleSettingsPanel(QWidget):
     def _start_sheet_read(self, mode="sheets", config=None):
         if self.sheet_thread and self.sheet_thread.isRunning(): return
         config=config or self.read_ui(); self._sheet_read_mode=mode
-        self.read_sheets_button.setEnabled(False); self.read_sheets_button.setText("正在读取�?)
+        self.read_sheets_button.setEnabled(False); self.read_sheets_button.setText("正在读取…")
         self.sheet_thread=QThread(self); self.sheet_worker=GoogleSheetReadWorker(config,mode); self.sheet_worker.moveToThread(self.sheet_thread)
         self.sheet_thread.started.connect(self.sheet_worker.run)
         self.sheet_worker.finished.connect(self._sheet_read_done, Qt.ConnectionType.QueuedConnection)
@@ -3100,11 +3100,11 @@ class GoogleSettingsPanel(QWidget):
         self.sheet_worker=None; self.sheet_thread=None
 
     def add_mapping(self, item=None):
-        item = item or {"field":"自定义字�?,"column":"","source":"static","value":""}; row = self.mapping_table.rowCount(); self.mapping_table.insertRow(row)
+        item = item or {"field":"自定义字段","column":"","source":"static","value":""}; row = self.mapping_table.rowCount(); self.mapping_table.insertRow(row)
         for col, value in enumerate((item.get("field",""), item.get("column",""), item.get("source","static"), item.get("value",""))): self.mapping_table.setItem(row,col,QTableWidgetItem(str(value)))
 
     def add_variable(self, item=None):
-        item = item or {"field":"选择�?,"column":"","options":[],"selected":""}; row = self.variable_table.rowCount(); self.variable_table.insertRow(row)
+        item = item or {"field":"选择项","column":"","options":[],"selected":""}; row = self.variable_table.rowCount(); self.variable_table.insertRow(row)
         field=item.get("field",""); options=list(item.get("options",[])); self._loaded_options[field]=options; self._variable_selected[field]=item.get("selected","")
         self.variable_table.setItem(row,0,QTableWidgetItem(str(field))); self.variable_table.setItem(row,1,QTableWidgetItem(str(item.get("column",""))))
         count=QTableWidgetItem(str(len(options))); count.setFlags(count.flags()&~Qt.ItemFlag.ItemIsEditable); self.variable_table.setItem(row,2,count)
@@ -3117,7 +3117,7 @@ class GoogleSettingsPanel(QWidget):
             if field and column:
                 fields.append({"field":field,"column":column,"options":list(self._loaded_options.get(field,[])),"selected":self._variable_selected.get(field,"")})
         if not fields:
-            QMessageBox.information(self,"没有字段","请先添加字段名称和写入列�?)
+            QMessageBox.information(self,"没有字段","请先添加字段名称和写入列。")
             return
         dialog=VariableOptionsDialog(fields,self)
         if dialog.exec()!=QDialog.DialogCode.Accepted: return
@@ -3132,7 +3132,7 @@ class GoogleSettingsPanel(QWidget):
         mappings=[]
         for row in range(self.mapping_table.rowCount()):
             values=[self.mapping_table.item(row,c).text().strip() if self.mapping_table.item(row,c) else "" for c in range(4)]
-            if values[1]: mappings.append({"field":values[0] or "自定义字�?,"column":values[1].upper(),"source":values[2] or "static","value":values[3]})
+            if values[1]: mappings.append({"field":values[0] or "自定义字段","column":values[1].upper(),"source":values[2] or "static","value":values[3]})
         variables=[]
         for row in range(self.variable_table.rowCount()):
             values=[self.variable_table.item(row,c).text().strip() if self.variable_table.item(row,c) else "" for c in range(2)]
@@ -3155,8 +3155,8 @@ class GoogleSettingsPanel(QWidget):
         self.variable_table.setRowCount(0); self._loaded_options={}; self._variable_selected={}
         for item in config.get("variable_fields",DEFAULT_VARIABLE_FIELDS): self.add_variable(item)
         if config.get("auth_ok"):
-            self.auth_status.setText(f"已授权：{config.get('auth_identity','Google 账号')}（启动后自动复用�?); self.auth_status.setStyleSheet("color:#86efac;")
-        else: self.auth_status.setText("尚未授权或需要重新检�?); self.auth_status.setStyleSheet("color:#fbbf24;")
+            self.auth_status.setText(f"已授权：{config.get('auth_identity','Google 账号')}（启动后自动复用）"); self.auth_status.setStyleSheet("color:#86efac;")
+        else: self.auth_status.setText("尚未授权或需要重新检查"); self.auth_status.setStyleSheet("color:#fbbf24;")
 
     def load_current(self):
         config = self.store.data["google_sync"]; profiles = config.get("sync_profiles",{})
@@ -3176,7 +3176,7 @@ class GoogleSettingsPanel(QWidget):
             profile_data=dict(config); profile_data.pop("sync_profiles",None); profile_data.pop("active_sync_profile",None); profiles[profile_name]=profile_data
         config["sync_profiles"] = profiles; config["active_sync_profile"] = profile_name if profile_name in profiles else ""
         self.store.data["google_sync"] = config; self.store.save(); self.profiles_changed.emit()
-        if not silent: QMessageBox.information(self,"配置已保�?,"Google 同步配置已保存�?)
+        if not silent: QMessageBox.information(self,"配置已保存","Google 同步配置已保存。")
 
     def save_profile(self):
         name = self.profile.currentText().strip()
@@ -3187,7 +3187,7 @@ class GoogleSettingsPanel(QWidget):
         config = self.read_ui(); profiles = dict(self.store.data["google_sync"].get("sync_profiles",{})); config.pop("sync_profiles",None)
         profiles[name] = config; current = dict(config); current["sync_profiles"] = profiles; current["active_sync_profile"] = name
         self.store.data["google_sync"] = current; self.store.save(); self.load_current(); self.profile.setCurrentText(name); self.profiles_changed.emit()
-        QMessageBox.information(self,"方案已保�?,f"同步方案“{name}”已保存并设为当前方案�?)
+        QMessageBox.information(self,"方案已保存",f"同步方案“{name}”已保存并设为当前方案。")
 
     def delete_profile(self):
         name=self.profile.currentText().strip(); profiles=dict(self.store.data["google_sync"].get("sync_profiles",{}))
@@ -3196,10 +3196,10 @@ class GoogleSettingsPanel(QWidget):
 
     def check_auth(self, interactive=True):
         if self.auth_thread and self.auth_thread.isRunning(): return
-        config=self.read_ui(); self.auth_status.setText("正在检�?Google 权限�?); self.auth_button.setEnabled(False)
+        config=self.read_ui(); self.auth_status.setText("正在检查 Google 权限…"); self.auth_button.setEnabled(False)
         self.auth_thread=QThread(self); self.auth_worker=GoogleAuthWorker(config, interactive); self.auth_worker.moveToThread(self.auth_thread)
         self.auth_thread.started.connect(self.auth_worker.run)
-        # 强制主线程处�?UI / 弹窗，避免跨线程崩溃
+        # 强制主线程处理 UI / 弹窗，避免跨线程崩溃
         self.auth_worker.finished.connect(self.auth_done, Qt.ConnectionType.QueuedConnection)
         self.auth_worker.finished.connect(self.auth_thread.quit)
         self.auth_thread.finished.connect(self.auth_ended)
@@ -3213,7 +3213,7 @@ class GoogleSettingsPanel(QWidget):
             profile_data=dict(config); profile_data.pop("sync_profiles",None); profile_data.pop("active_sync_profile",None); profiles[profile_name]=profile_data
         config["sync_profiles"]=profiles; config["active_sync_profile"]=profile_name if profile_name in profiles else ""
         self.store.data["google_sync"]=config; self.store.save(); self.profiles_changed.emit()
-        self.auth_status.setText(("授权成功�? if ok else "授权失败�?)+message); self.auth_status.setStyleSheet("color:#86efac;" if ok else "color:#fca5a5;")
+        self.auth_status.setText(("授权成功：" if ok else "授权失败：")+message); self.auth_status.setStyleSheet("color:#86efac;" if ok else "color:#fca5a5;")
         if not ok: QMessageBox.warning(self,"Google 授权失败",message)
 
     def auth_ended(self):
@@ -3286,7 +3286,7 @@ def _select_release_asset(assets, *, is_win=True, is_mac=False, machine=""):
         if not url or not name:
             return -1
         if is_win:
-            # VideoToolkit_Setup_vX.Y.Z.exe  (no "windows" in name �?previous bug)
+            # VideoToolkit_Setup_vX.Y.Z.exe  (no "windows" in name — previous bug)
             if name_l.endswith(".exe") and "setup" in name_l:
                 return 100
             if name_l.endswith(".exe") and ("windows" in name_l or "win64" in name_l or "win32" in name_l):
@@ -3341,7 +3341,7 @@ def _github_download_candidates(url: str) -> list[str]:
 
 
 class UpdateCheckWorker(QObject):
-    """�?GitHub releases/latest 检查新版本（Setup .exe 优先，其次为 .zip 绿色包）�?""
+    """从 GitHub releases/latest 检查新版本（Setup .exe 优先，其次为 .zip 绿色包）。"""
     # has_new, latest_version, download_url, filename, error
     finished = Signal(bool, str, str, str, str)
 
@@ -3377,11 +3377,11 @@ class UpdateCheckWorker(QObject):
             tag_name = str(data.get("tag_name") or "").strip()
             latest_version = tag_name.lstrip("vV")
             if not latest_version:
-                self.finished.emit(False, "", "", "", "无法�?GitHub 获取最新版本号")
+                self.finished.emit(False, "", "", "", "无法从 GitHub 获取最新版本号")
                 return
 
             has_new = _parse_version_parts(latest_version) > _parse_version_parts(self.current_version)
-            # 已是最新：不必解析安装包，避免把文件名误当成错误信�?
+            # 已是最新：不必解析安装包，避免把文件名误当成错误信息
             if not has_new:
                 self.finished.emit(False, latest_version, "", "", "")
                 return
@@ -3397,8 +3397,8 @@ class UpdateCheckWorker(QObject):
             if not download_url:
                 self.finished.emit(
                     True, latest_version, "", "",
-                    f"发现新版�?v{latest_version}，但未找到当前系统可用的安装包。\n"
-                    "请到 GitHub Releases 页面手动下载�?,
+                    f"发现新版本 v{latest_version}，但未找到当前系统可用的安装包。\n"
+                    "请到 GitHub Releases 页面手动下载。",
                 )
                 return
 
@@ -3440,12 +3440,12 @@ class DownloadWorker(QObject):
                 "User-Agent": f"VideoToolkit-Updater/{self.version or APP_VERSION}",
                 "Accept": "*/*",
             }
-            # connect 15s；单次读�?180s（大安装�?弱网）；官方失败再试镜像
+            # connect 15s；单次读块 180s（大安装包/弱网）；官方失败再试镜像
             timeouts = (15, 180)
             last_error = ""
             for attempt, candidate in enumerate(_github_download_candidates(self.url), 1):
                 if self.cancelled:
-                    self.finished.emit(False, "", "下载已取�?)
+                    self.finished.emit(False, "", "下载已取消")
                     return
                 try:
                     with requests.get(
@@ -3466,7 +3466,7 @@ class DownloadWorker(QObject):
                                         dest.unlink(missing_ok=True)
                                     except Exception:
                                         pass
-                                    self.finished.emit(False, "", "下载已取�?)
+                                    self.finished.emit(False, "", "下载已取消")
                                     return
                                 if not chunk:
                                     continue
@@ -3476,7 +3476,7 @@ class DownloadWorker(QObject):
                                     self.progress.emit(min(99, int(downloaded / total * 100)))
                         size = dest.stat().st_size if dest.exists() else 0
                         if size < 1024 * 100:
-                            raise RuntimeError(f"下载文件过小（{size} 字节），可能被拦截或不完�?)
+                            raise RuntimeError(f"下载文件过小（{size} 字节），可能被拦截或不完整")
                         if total > 0 and size < int(total * 0.98):
                             raise RuntimeError(
                                 f"下载不完整：已下 {size // (1024 * 1024)} MB /"
@@ -3492,7 +3492,7 @@ class DownloadWorker(QObject):
                             dest.unlink(missing_ok=True)
                     except Exception:
                         pass
-                    # 下一个候选镜�?
+                    # 下一个候选镜像
                     continue
 
             tip = (
@@ -3510,7 +3510,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         _startup_trace("MainWindow init")
         # 打包版的 FFmpeg / FFprobe 位于 PyInstaller 解包目录；将它与用户组件目录
-        # 一并加�?PATH，确保截图、剪辑、水印、字幕和组件检测使用同一套工具�?
+        # 一并加入 PATH，确保截图、剪辑、水印、字幕和组件检测使用同一套工具。
         media_paths = [str(component_bin())]
         bundled_media = str(bundled_media_tool("ffmpeg").parent)
         if bundled_media_tool("ffmpeg").exists():
@@ -3538,14 +3538,14 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.full_text_tooltips = FullTextToolTipFilter(self)
         QApplication.instance().installEventFilter(self.full_text_tooltips)
-        # 全应用：下拉/数字/滑条需点击聚焦后才响应滚轮（同 Reels 逻辑�?
+        # 全应用：下拉/数字/滑条需点击聚焦后才响应滚轮（同 Reels 逻辑）
         self._focus_wheel_filter = FocusOnlyWheelFilter(self)
         QApplication.instance().installEventFilter(self._focus_wheel_filter)
         apply_click_focus_to_wheel_controls(self)
         _startup_trace("UI built")
         self._refresh_keys()
         _startup_trace("keys refreshed")
-        # 启动后自动在后台静默检查更新（延迟3秒，不阻塞主UI展示�?
+        # 启动后自动在后台静默检查更新（延迟3秒，不阻塞主UI展示）
         QTimer.singleShot(3000, lambda: self._check_update(manual=False))
     def _build_ui(self):
         root = QWidget()
@@ -3560,23 +3560,23 @@ class MainWindow(QMainWindow):
         nav_layout = QHBoxLayout(nav)
         nav_layout.setContentsMargins(18, 10, 18, 10)
         nav_layout.setSpacing(5)
-        brand = QLabel(f"�? {APP_DISPLAY_NAME}")
+        brand = QLabel(f"▶  {APP_DISPLAY_NAME}")
         brand.setObjectName("brand")
         nav_layout.addWidget(brand)
         nav_layout.addSpacing(16)
         self.nav_buttons = []
-        # 索引�?self.pages 顺序一致：0 首页 �?10 元数�?�?11 文字转语�?
+        # 索引与 self.pages 顺序一致：0 首页 … 10 元数据 … 11 文字转语音
         nav_items = (
             ("首页", 0),
             ("格式转换", 1),
             ("智能剪辑", 2),
-            ("Reels 编辑�?, 3),
-            ("文字转语�?, 11),
-            ("批量重命�?, 4),
-            ("清除元数�?, 10),
+            ("Reels 编辑器", 3),
+            ("文字转语音", 11),
+            ("批量重命名", 4),
+            ("清除元数据", 10),
             ("字幕提取", 5),
-            ("自动流水�?, 8),
-            ("设置与组�?, 7),
+            ("自动流水线", 8),
+            ("设置与组件", 7),
             ("帮助", 9),
         )
         for text, page_index in nav_items:
@@ -3588,22 +3588,22 @@ class MainWindow(QMainWindow):
             nav_layout.addWidget(btn)
             self.nav_buttons.append(btn)
 
-        # 帮助右侧：检查更�?�?查看软件日志（均不参与页面切换）
-        self.update_btn = QPushButton("检查更�?)
+        # 帮助右侧：检查更新 → 查看软件日志（均不参与页面切换）
+        self.update_btn = QPushButton("检查更新")
         self.update_btn.setObjectName("updateNavButton")
-        self.update_btn.setToolTip("检查是否有新版本；启动后也会在后台静默检�?)
+        self.update_btn.setToolTip("检查是否有新版本；启动后也会在后台静默检查")
         self.update_btn.clicked.connect(lambda: self._check_update(manual=True))
         nav_layout.addWidget(self.update_btn)
 
         self.log_nav_btn = QPushButton("查看软件日志")
         self.log_nav_btn.setObjectName("logNavButton")
-        self.log_nav_btn.setToolTip("打开全局运行日志，排查批处理�?API 报错")
+        self.log_nav_btn.setToolTip("打开全局运行日志，排查批处理与 API 报错")
         self.log_nav_btn.clicked.connect(self._show_app_log)
         nav_layout.addWidget(self.log_nav_btn)
 
         self.merge_report_nav_btn = QPushButton("合成报表")
         self.merge_report_nav_btn.setObjectName("logNavButton")
-        self.merge_report_nav_btn.setToolTip("查看 Reels 分组合成统计与成品记�?)
+        self.merge_report_nav_btn.setToolTip("查看 Reels 分组合成统计与成品记录")
         self.merge_report_nav_btn.clicked.connect(self._show_reels_merge_report)
         nav_layout.addWidget(self.merge_report_nav_btn)
 
@@ -3640,7 +3640,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.rename_page)
         self.pages.addWidget(self._subtitle_page())
         _startup_trace("subtitle page ready")
-        # 保留原页面索�?6 作为兼容入口；_show_page(6) 会转到设置中的密钥分区�?
+        # 保留原页面索引 6 作为兼容入口；_show_page(6) 会转到设置中的密钥分区。
         self.pages.addWidget(QWidget())
         _startup_trace("keys page ready")
         self.key_settings_page = self._keys_page()
@@ -3682,15 +3682,15 @@ class MainWindow(QMainWindow):
         )
 
     def _build_settings_shell(self):
-        """设置页：左侧导航 + 右侧内容，与帮助页统一�?""
+        """设置页：左侧导航 + 右侧内容，与帮助页统一。"""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(28, 18, 28, 18)
         layout.setSpacing(10)
-        heading = QLabel("设置与组�?)
+        heading = QLabel("设置与组件")
         heading.setObjectName("heading")
         layout.addWidget(heading)
-        sub = QLabel("左侧切换分区：组�?· 字体与语言�?· Google · 密钥。布局与帮助页一致�?)
+        sub = QLabel("左侧切换分区：组件 · 字体与语言包 · Google · 密钥。布局与帮助页一致。")
         sub.setWordWrap(True)
         sub.setStyleSheet("color:#94a3b8;font-size:14px;")
         layout.addWidget(sub)
@@ -3779,10 +3779,10 @@ class MainWindow(QMainWindow):
 
     def _font_settings_page(self):
         page, layout = self._page_shell(
-            "🔤 字体与语言�?,
-            "字体用于 Reels 预览与烧录；语言包控制字幕引�?RTL 等书写规范（无需系统语言包）�?,
+            "🔤 字体与语言包",
+            "字体用于 Reels 预览与烧录；语言包控制字幕引号/RTL 等书写规范（无需系统语言包）。",
         )
-        group = QGroupBox("🔤 本地与开源字�?)
+        group = QGroupBox("🔤 本地与开源字体")
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(14, 14, 14, 14)
         group_layout.setSpacing(10)
@@ -3793,45 +3793,45 @@ class MainWindow(QMainWindow):
         folder_row.addWidget(folder, 1)
         group_layout.addLayout(folder_row)
         buttons = QHBoxLayout()
-        import_button = QPushButton("导入本地字体�?)
+        import_button = QPushButton("导入本地字体…")
         import_button.setObjectName("primary")
         import_button.setToolTip("支持 TTF、OTF、TTC")
         import_button.clicked.connect(self.dynamic_caption_page._import_local_fonts)
-        open_button = QPushButton("下载开源字体�?)
-        open_button.setToolTip("�?Google Fonts 官方仓库下载，安装一次后可离线使�?)
+        open_button = QPushButton("下载开源字体…")
+        open_button.setToolTip("从 Google Fonts 官方仓库下载，安装一次后可离线使用")
         open_button.clicked.connect(self.dynamic_caption_page._open_source_font_library)
         buttons.addWidget(import_button)
         buttons.addWidget(open_button)
         buttons.addStretch()
         group_layout.addLayout(buttons)
-        note = QLabel("导入后无需重启；回�?Reels「字体」下拉即可选择。阿拉伯/希伯来请选用支持该文种的字体�?)
+        note = QLabel("导入后无需重启；回到 Reels「字体」下拉即可选择。阿拉伯/希伯来请选用支持该文种的字体。")
         note.setWordWrap(True)
         note.setStyleSheet("color:#7dd3fc;background:#0b1830;padding:8px;border-radius:5px;")
         group_layout.addWidget(note)
         layout.addWidget(group)
 
-        lang_group = QGroupBox("🌐 字幕书写语言�?)
+        lang_group = QGroupBox("🌐 字幕书写语言包")
         lang_layout = QVBoxLayout(lang_group)
         lang_layout.setContentsMargins(14, 14, 14, 14)
         lang_layout.setSpacing(10)
         lang_layout.addWidget(QLabel(
             "内置：en / pt / es / fr / de / it / el / ru / tr / zh / ar / he。\n"
-            "导入 JSON 可扩展或覆盖（需�?code 字段，如 \"code\": \"my\"）�?
+            "导入 JSON 可扩展或覆盖（需含 code 字段，如 \"code\": \"my\"）。"
         ))
         pack_dir = QLineEdit(str(user_language_packs_dir()))
         pack_dir.setReadOnly(True)
         dir_row = QHBoxLayout()
-        dir_row.addWidget(QLabel("用户语言包目�?))
+        dir_row.addWidget(QLabel("用户语言包目录"))
         dir_row.addWidget(pack_dir, 1)
         lang_layout.addLayout(dir_row)
         lang_btns = QHBoxLayout()
-        import_pack = QPushButton("导入语言�?JSON�?)
+        import_pack = QPushButton("导入语言包 JSON…")
         import_pack.setObjectName("primary")
         import_pack.setToolTip("选择 .json 语言包文件，复制到用户目录并立即生效")
         import_pack.clicked.connect(self._import_language_pack)
-        open_pack_dir = QPushButton("打开语言包目�?)
+        open_pack_dir = QPushButton("打开语言包目录")
         open_pack_dir.clicked.connect(lambda: self._open_path(str(user_language_packs_dir())))
-        reload_pack = QPushButton("重新加载语言�?)
+        reload_pack = QPushButton("重新加载语言包")
         reload_pack.clicked.connect(self._reload_language_packs)
         lang_btns.addWidget(import_pack)
         lang_btns.addWidget(open_pack_dir)
@@ -3840,7 +3840,7 @@ class MainWindow(QMainWindow):
         lang_layout.addLayout(lang_btns)
         sample = QLabel(
             "JSON 示例：\n"
-            '{ "code": "nl", "name": "Nederlands", "quote_open": "�?, "quote_close": "�?, "rtl": false }'
+            '{ "code": "nl", "name": "Nederlands", "quote_open": "“", "quote_close": "”", "rtl": false }'
         )
         sample.setWordWrap(True)
         sample.setStyleSheet(
@@ -3854,13 +3854,13 @@ class MainWindow(QMainWindow):
 
     def _import_language_pack(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入语言�?, "", "语言�?JSON (*.json);;所有文�?(*.*)")
+            self, "导入语言包", "", "语言包 JSON (*.json);;所有文件 (*.*)")
         if not path:
             return
         ok, message = import_language_pack_file(path)
         if ok:
             QMessageBox.information(self, "导入成功", message)
-            write_app_log(message, "INFO", "语言�?)
+            write_app_log(message, "INFO", "语言包")
             # 刷新 Reels / 字幕语言下拉
             if hasattr(self, "dynamic_caption_page") and hasattr(self.dynamic_caption_page, "writing_language"):
                 cur = writing_language_from_ui(self.dynamic_caption_page.writing_language.currentText())
@@ -3873,8 +3873,8 @@ class MainWindow(QMainWindow):
 
     def _reload_language_packs(self):
         reload_language_packs()
-        QMessageBox.information(self, "已重新加�?, "语言包缓存已刷新。新规则将在下次格式化字幕时生效�?)
-        write_app_log("用户触发重新加载语言�?, "INFO", "语言�?)
+        QMessageBox.information(self, "已重新加载", "语言包缓存已刷新。新规则将在下次格式化字幕时生效。")
+        write_app_log("用户触发重新加载语言包", "INFO", "语言包")
 
     def _open_path(self, path: str):
         from modules.platform_utils import open_local_path
@@ -3895,31 +3895,31 @@ class MainWindow(QMainWindow):
         return page, layout
 
     def _home_page(self):
-        page, layout = self._page_shell("一站式视频工作�?, "选择需要的业务功能；文件、文件夹和网络链接均可按模块批量处理�?)
+        page, layout = self._page_shell("一站式视频工作台", "选择需要的业务功能；文件、文件夹和网络链接均可按模块批量处理。")
         tools = [
-            ("�?, "格式转换",
-             "�?批量截图（网�?本地视频取帧）\n�?图片格式转换（含 HEIF/HEIC）\n�?视频压缩/转格式：优先转封装保画质（如 4K MOV�?K MP4）\n�?不兼容时自动高质量重编码减小体积",
+            ("▣", "格式转换",
+             "• 批量截图（网络/本地视频取帧）\n• 图片格式转换（含 HEIF/HEIC）\n• 视频压缩/转格式：优先转封装保画质（如 4K MOV→4K MP4）\n• 不兼容时自动高质量重编码减小体积",
              "#38bdf8", "page:1"),
-            ("�?, "智能剪辑",
-             "�?根据画面变化自动检测视频场景\n�?支持自定义片段时长和批量切分\n�?多视频、文件夹拖拽和任务队列\n�?输出成品并保留视频原有立体声音频",
+            ("✂", "智能剪辑",
+             "• 根据画面变化自动检测视频场景\n• 支持自定义片段时长和批量切分\n• 多视频、文件夹拖拽和任务队列\n• 输出成品并保留视频原有立体声音频",
              "#a78bfa", "page:2"),
-            ("�?, "Reels 编辑�?,
-             "�?分组合成、批量配音与字幕智能识别\n�?字幕样式、字幕校对、视频预览和公司水印\n�?每个视频对应自己的音频与文案并批量生成\n�?可选生成后上传云端并按方案填写 Google Sheets",
+            ("▶", "Reels 编辑器",
+             "• 分组合成、批量配音与字幕智能识别\n• 字幕样式、字幕校对、视频预览和公司水印\n• 每个视频对应自己的音频与文案并批量生成\n• 可选生成后上传云端并按方案填写 Google Sheets",
              "#34d399", "page:3"),
-            ("🎤", "文字转语�?,
-             "�?独立批量配音（微�?/ ElevenLabs / Gemini）\n�?ElevenLabs 网页会话扣点数（同浏览器插件 stream API）\n�?多卡文案、Excel 粘贴、本地缓存避免重复扣点\n�?音色/模型、混响、试听与导出目录",
+            ("🎤", "文字转语音",
+             "• 独立批量配音（微软 / ElevenLabs / Gemini）\n• ElevenLabs 网页会话扣点数（同浏览器插件 stream API）\n• 多卡文案、Excel 粘贴、本地缓存避免重复扣点\n• 音色/模型、混响、试听与导出目录",
              "#f472b6", "page:11"),
-            ("A�?, "视频 / 文件重命�?,
-             "�?文件自然排序�?Windows 安全名称处理\n�?标题、日期、前后缀和连续编号组合\n�?执行前完整预览新旧文件名\n�?多套前缀与后缀方案保存和快速切�?,
+            ("A↔", "视频 / 文件重命名",
+             "• 文件自然排序及 Windows 安全名称处理\n• 标题、日期、前后缀和连续编号组合\n• 执行前完整预览新旧文件名\n• 多套前缀与后缀方案保存和快速切换",
              "#fbbf24", "page:4"),
             ("CC", "智能字幕提取",
-             "�?本地 Whisper 无需密钥即可识别\n�?在线服务支持多密钥检测与轮询\n�?批量处理网络链接、本地视频或音频\n�?中外文对照、全部复制及批量导出字幕",
+             "• 本地 Whisper 无需密钥即可识别\n• 在线服务支持多密钥检测与轮询\n• 批量处理网络链接、本地视频或音频\n• 中外文对照、全部复制及批量导出字幕",
              "#fb7185", "page:5"),
-            ("�?, "自动流水�?,
-             "�?智能剪辑 �?字幕提取 �?标题生成 �?批量重命名\n�?批量上传重命名成品并填写 Google Sheets\n�?上传成功、填表失败时可单独继续填表\n�?支持断点续接、方案保存和重复链接跳过",
+            ("⇢", "自动流水线",
+             "• 智能剪辑 → 字幕提取 → 标题生成 → 批量重命名\n• 批量上传重命名成品并填写 Google Sheets\n• 上传成功、填表失败时可单独继续填表\n• 支持断点续接、方案保存和重复链接跳过",
              "#22d3ee", "page:8"),
-            ("�?, "批量清除素材元数�?,
-             "�?无损清除视频/音频的标题、作者、设备和章节信息\n�?清除图片 EXIF、XMP、拍摄时间和位置数据\n�?文件与文件夹拖拽、父目录和子目录批量选择\n�?可作为自动流水线的素材预处理步骤",
+            ("⌫", "批量清除素材元数据",
+             "• 无损清除视频/音频的标题、作者、设备和章节信息\n• 清除图片 EXIF、XMP、拍摄时间和位置数据\n• 文件与文件夹拖拽、父目录和子目录批量选择\n• 可作为自动流水线的素材预处理步骤",
              "#60a5fa", "page:10"),
         ]
         rows = [QHBoxLayout() for _ in range((len(tools) + 1) // 2)]
@@ -3937,10 +3937,10 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(28, 18, 28, 18)
         layout.setSpacing(10)
 
-        heading = QLabel("帮助与使用说�?)
+        heading = QLabel("帮助与使用说明")
         heading.setObjectName("heading")
         layout.addWidget(heading)
-        sub = QLabel("最上方「更新日志」看新功能；「快速上手」入门；「常见问题」带图标分类，右侧可快速跳转�?)
+        sub = QLabel("最上方「更新日志」看新功能；「快速上手」入门；「常见问题」带图标分类，右侧可快速跳转。")
         sub.setWordWrap(True)
         sub.setStyleSheet("color:#94a3b8;font-size:14px;")
         layout.addWidget(sub)
@@ -3979,7 +3979,7 @@ class MainWindow(QMainWindow):
         jump_layout = QHBoxLayout(self._help_jump_bar)
         jump_layout.setContentsMargins(10, 8, 10, 8)
         jump_layout.setSpacing(6)
-        jump_label = QLabel("快速跳�?)
+        jump_label = QLabel("快速跳转")
         jump_label.setStyleSheet("color:#94a3b8;font-size:12px;font-weight:700;")
         jump_layout.addWidget(jump_label)
         self._help_jump_buttons = []
@@ -4070,13 +4070,13 @@ class MainWindow(QMainWindow):
             if hasattr(self, "_help_jump_bar"):
                 self._help_jump_bar.setVisible(index == HELP_FAQ_TAB_INDEX)
             if anchor and index == HELP_FAQ_TAB_INDEX:
-                # 等文档布局完成后再滚动，避免锚点尚未就�?
+                # 等文档布局完成后再滚动，避免锚点尚未就绪
                 QTimer.singleShot(30, lambda a=anchor: self._help_browser.scrollToAnchor(a))
             else:
                 self._help_browser.verticalScrollBar().setValue(0)
 
     def _jump_help_faq(self, anchor: str):
-        """右侧顶部导航：进入常见问题并滚动到对应板块�?""
+        """右侧顶部导航：进入常见问题并滚动到对应板块。"""
         self._show_help_tab(HELP_FAQ_TAB_INDEX, anchor=anchor)
 
     def _show_app_log(self):
@@ -4085,7 +4085,7 @@ class MainWindow(QMainWindow):
         dialog.resize(920, 600)
         box = QVBoxLayout(dialog)
         hint = QLabel(
-            "记录批处理进度、API 配额/密钥异常、自动切换和无法继续的错误，方便后续排查�?
+            "记录批处理进度、API 配额/密钥异常、自动切换和无法继续的错误，方便后续排查。"
         )
         hint.setWordWrap(True); hint.setStyleSheet("color:#7dd3fc;")
         box.addWidget(hint)
@@ -4102,7 +4102,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _subtitle_page(self):
-        page, layout = self._page_shell("智能提取视频字幕", "结果直接显示在当前窗口；支持原文与简体中文对照、一键复制�?)
+        page, layout = self._page_shell("智能提取视频字幕", "结果直接显示在当前窗口；支持原文与简体中文对照、一键复制。")
         self.subtitle_results = {}
 
         main_split = QSplitter(Qt.Orientation.Horizontal)
@@ -4112,7 +4112,7 @@ class MainWindow(QMainWindow):
         control_layout = QVBoxLayout(control_panel)
         control_layout.setContentsMargins(12, 10, 12, 10); control_layout.setSpacing(8)
 
-        local_header = QHBoxLayout(); local_header.addWidget(QLabel("本地媒体（可拖入文件或文件夹�?)); local_header.addStretch()
+        local_header = QHBoxLayout(); local_header.addWidget(QLabel("本地媒体（可拖入文件或文件夹）")); local_header.addStretch()
         self.media_source_hint = QLabel("尚未添加")
         self.media_source_hint.setStyleSheet("color:#7dd3fc;")
         local_header.addWidget(self.media_source_hint); control_layout.addLayout(local_header)
@@ -4122,7 +4122,7 @@ class MainWindow(QMainWindow):
         file_buttons = QHBoxLayout()
         add = QPushButton("添加视频 / 音频")
         add.clicked.connect(self._add_media)
-        add_folder = QPushButton("添加文件�?); add_folder.clicked.connect(self._add_media_folder)
+        add_folder = QPushButton("添加文件夹"); add_folder.clicked.connect(self._add_media_folder)
         remove = QPushButton("移除选中")
         remove.clicked.connect(self._remove_selected_media)
         file_buttons.addWidget(add)
@@ -4139,7 +4139,7 @@ class MainWindow(QMainWindow):
         control_layout.addLayout(url_header)
         self.url_input = QPlainTextEdit()
         self.url_input.setPlaceholderText(
-            "支持 YouTube、Facebook、Instagram、TikTok；可一次粘贴多个链接，每行一�?)
+            "支持 YouTube、Facebook、Instagram、TikTok；可一次粘贴多个链接，每行一个")
         self.url_input.setMinimumHeight(64); self.url_input.setMaximumHeight(88)
         control_layout.addWidget(self.url_input)
 
@@ -4150,35 +4150,35 @@ class MainWindow(QMainWindow):
         self.provider_combo = QComboBox(); self.provider_combo.addItems(TRANSCRIPTION_PROVIDERS)
         self.provider_combo.currentTextChanged.connect(self._provider_changed)
         form.addRow("识别服务", self.provider_combo)
-        # 可编辑下拉：本地模型三选一；云端可填自定义模型�?
+        # 可编辑下拉：本地模型三选一；云端可填自定义模型名
         self.model_edit = QComboBox()
         self.model_edit.setEditable(True)
         self.model_edit.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.model_edit.setToolTip(
-            "本地 Whisper：small �?/ medium 推荐（语义更稳）/ large-v3 最准。\n"
-            "Groq 建议 whisper-large-v3；Gemini 建议 gemini-3.6-flash�?.0 已关停）。\n"
-            "自动模式显示「按优先级自动匹配」，本地体积在选中「本�?Whisper」时设置�?
+            "本地 Whisper：small 快 / medium 推荐（语义更稳）/ large-v3 最准。\n"
+            "Groq 建议 whisper-large-v3；Gemini 建议 gemini-3.6-flash（2.0 已关停）。\n"
+            "自动模式显示「按优先级自动匹配」，本地体积在选中「本地 Whisper」时设置。"
         )
         form.addRow("模型", self.model_edit)
         self.language_edit = QComboBox()
         self.language_edit.setEditable(True)
         fill_writing_language_combo(self.language_edit, "")
-        # 第一项「自动检测」对识别也表�?auto
+        # 第一项「自动检测」对识别也表示 auto
         self.language_edit.setToolTip(
             "识别语言提示（Whisper/云服务）与书写规范共用。\n"
-            "选「自动检测」时由模型判断；马达加斯加语请选「Malagasy 马达加斯加语」（�?mg），"
+            "选「自动检测」时由模型判断；马达加斯加语请选「Malagasy 马达加斯加语」（码 mg），"
             "勿用自动——拉丁字母易被误判为英语/法语。\n"
-            "也可选希�?阿拉�?西语等，或直接输�?el/ar/pt/mg�?
+            "也可选希腊/阿拉伯/西语等，或直接输入 el/ar/pt/mg。"
         )
         form.addRow("语言 / 书写规范", self.language_edit)
         self.diarize_check = QCheckBox("区分说话人（服务支持时启用）")
-        form.addRow("说话�?, self.diarize_check)
+        form.addRow("说话人", self.diarize_check)
         priority_widget = QWidget(); priority_row = QHBoxLayout(priority_widget)
         priority_row.setContentsMargins(0, 0, 0, 0); priority_row.setSpacing(5)
         self.priority_label = QLabel(); self.priority_label.setWordWrap(True)
         priority_btn = QPushButton("调整顺序"); priority_btn.clicked.connect(self._open_priority_dialog)
         priority_row.addWidget(self.priority_label, 1); priority_row.addWidget(priority_btn)
-        form.addRow("自动优先�?, priority_widget)
+        form.addRow("自动优先级", priority_widget)
         control_layout.addWidget(settings_group)
 
         self.transcribe_progress = QProgressBar(); self.transcribe_progress.setValue(0)
@@ -4187,7 +4187,7 @@ class MainWindow(QMainWindow):
         self.subtitle_resume_check = QCheckBox("自动续接上次进度")
         self.subtitle_resume_check.setChecked(True)
         self.subtitle_resume_check.setToolTip("同一批素材和识别设置再次执行时，自动跳过已成功的视频")
-        self.start_btn = QPushButton("开始提取字�?); self.start_btn.setObjectName("primary")
+        self.start_btn = QPushButton("开始提取字幕"); self.start_btn.setObjectName("primary")
         self.start_btn.clicked.connect(self._start_transcription)
         self.cancel_btn = QPushButton("取消"); self.cancel_btn.setEnabled(False); self.cancel_btn.clicked.connect(self._cancel_transcription)
         actions.addWidget(self.subtitle_resume_check); actions.addStretch()
@@ -4206,12 +4206,12 @@ class MainWindow(QMainWindow):
         self.result_combo.currentTextChanged.connect(self._show_subtitle_result)
         copy_original = QPushButton("复制当前原文"); copy_original.clicked.connect(self._copy_current_original)
         copy_bilingual = QPushButton("复制当前对照"); copy_bilingual.setToolTip(
-            "复制�?CSV 两列（原文\\t中文），可直接粘贴到 Google 表格左右并排"
+            "复制为 CSV 两列（原文\\t中文），可直接粘贴到 Google 表格左右并排"
         )
         copy_bilingual.clicked.connect(self._copy_bilingual)
         copy_all_original = QPushButton("复制全部原文"); copy_all_original.clicked.connect(self._copy_all_original)
         copy_all_bilingual = QPushButton("复制全部对照"); copy_all_bilingual.setToolTip(
-            "复制全部结果�?CSV 两列（原文\\t中文），可直接粘贴到 Google 表格"
+            "复制全部结果为 CSV 两列（原文\\t中文），可直接粘贴到 Google 表格"
         )
         copy_all_bilingual.clicked.connect(self._copy_all_bilingual)
         export_all = QPushButton("批量导出字幕"); export_all.setObjectName("primary"); export_all.clicked.connect(self._export_all_subtitles)
@@ -4228,7 +4228,7 @@ class MainWindow(QMainWindow):
         result_split = QSplitter(Qt.Orientation.Vertical); result_split.setChildrenCollapsible(False)
         original_group = QGroupBox("识别原文"); original_layout = QVBoxLayout(original_group)
         self.original_result = QPlainTextEdit(); self.original_result.setReadOnly(True); original_layout.addWidget(self.original_result)
-        chinese_group = QGroupBox("简体中文对�?); chinese_layout = QVBoxLayout(chinese_group)
+        chinese_group = QGroupBox("简体中文对照"); chinese_layout = QVBoxLayout(chinese_group)
         self.chinese_result = QPlainTextEdit(); self.chinese_result.setReadOnly(True); chinese_layout.addWidget(self.chinese_result)
         result_split.addWidget(original_group); result_split.addWidget(chinese_group); result_split.setSizes([360, 360])
         result_layout.addWidget(result_split, 1)
@@ -4244,35 +4244,35 @@ class MainWindow(QMainWindow):
 
     def _pipeline_page(self):
         page, layout = self._page_shell(
-            "批量自动流水�?,
-            "一次完成：智能画面剪辑 �?批量字幕 �?字幕作为标题 �?按规则重命名；中间结果全部保留�?)
+            "批量自动流水线",
+            "一次完成：智能画面剪辑 → 批量字幕 → 字幕作为标题 → 按规则重命名；中间结果全部保留。")
         split = QSplitter(Qt.Orientation.Horizontal); split.setChildrenCollapsible(False)
         left = QFrame(); left.setObjectName("panel"); left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(12, 10, 12, 10); left_layout.setSpacing(7)
-        left_layout.addWidget(QLabel("1. 原始视频（可拖入多个视频或文件夹�?))
+        left_layout.addWidget(QLabel("1. 原始视频（可拖入多个视频或文件夹）"))
         self.pipeline_files = MediaDropList(); self.pipeline_files.setMinimumHeight(145)
         self.pipeline_files.paths_dropped.connect(self._pipeline_add_paths); left_layout.addWidget(self.pipeline_files)
         source_buttons = QHBoxLayout()
         add_files = QPushButton("添加视频"); add_files.clicked.connect(self._pipeline_choose_files)
-        add_folder = QPushButton("添加文件�?); add_folder.clicked.connect(self._pipeline_choose_folder)
+        add_folder = QPushButton("添加文件夹"); add_folder.clicked.connect(self._pipeline_choose_folder)
         clear = QPushButton("清空"); clear.clicked.connect(self.pipeline_files.clear)
         for button in (add_files, add_folder, clear): source_buttons.addWidget(button)
         left_layout.addLayout(source_buttons)
 
         settings = QGroupBox("2. 流程设置"); form = QFormLayout(settings)
-        output_row = QHBoxLayout(); self.pipeline_output = QLineEdit(str(default_output_path("流水线输�?)))
-        choose_output = QPushButton("选择�?); choose_output.clicked.connect(self._pipeline_choose_output)
+        output_row = QHBoxLayout(); self.pipeline_output = QLineEdit(str(default_output_path("流水线输出")))
+        choose_output = QPushButton("选择…"); choose_output.clicked.connect(self._pipeline_choose_output)
         output_row.addWidget(self.pipeline_output); output_row.addWidget(choose_output)
         output_widget = QWidget(); output_widget.setLayout(output_row); form.addRow("输出目录", output_widget)
         self.pipeline_threshold = QSpinBox(); self.pipeline_threshold.setRange(1, 100); self.pipeline_threshold.setValue(27)
-        form.addRow("画面阈�?, self.pipeline_threshold)
+        form.addRow("画面阈值", self.pipeline_threshold)
         self.pipeline_provider = QComboBox(); self.pipeline_provider.addItems(TRANSCRIPTION_PROVIDERS)
         form.addRow("字幕服务", self.pipeline_provider)
         self.pipeline_language = QComboBox(); self.pipeline_language.setEditable(True)
         fill_writing_language_combo(self.pipeline_language, "")
         self.pipeline_language.setToolTip(
-            "识别语言与书写规范。马达加斯加语请�?Malagasy（mg）；"
-            "自动检测易把马拉加斯语判成英语/法语�?
+            "识别语言与书写规范。马达加斯加语请选 Malagasy（mg）；"
+            "自动检测易把马拉加斯语判成英语/法语。"
         )
         form.addRow("语言 / 书写规范", self.pipeline_language)
         rename_line = QHBoxLayout()
@@ -4286,37 +4286,37 @@ class MainWindow(QMainWindow):
         number_line.addWidget(QLabel("起始编号")); number_line.addWidget(self.pipeline_start)
         number_line.addWidget(QLabel("位数")); number_line.addWidget(self.pipeline_padding); number_line.addStretch()
         number_widget = QWidget(); number_widget.setLayout(number_line); form.addRow("编号", number_widget)
-        # 声音 / 水印：与 Reels 编辑器一�?
+        # 声音 / 水印：与 Reels 编辑器一致
         self.pipeline_audio_mode = QComboBox()
         self.pipeline_audio_mode.addItems([
-            "仅视频原�?,
-            "视频原声＋背景音�?,
+            "仅视频原声",
+            "视频原声＋背景音乐",
         ])
         self.pipeline_audio_mode.setToolTip(
-            "�?Reels 一致：要么只保留原声，要么原声�?BGM 混合（不替换掉原声）�?
+            "与 Reels 一致：要么只保留原声，要么原声与 BGM 混合（不替换掉原声）。"
         )
         form.addRow("声音模式", self.pipeline_audio_mode)
         self.pipeline_bgm_path = QLineEdit()
-        self.pipeline_bgm_path.setPlaceholderText("BGM 文件 �?文件夹（多曲库随机匹配）")
+        self.pipeline_bgm_path.setPlaceholderText("BGM 文件 或 文件夹（多曲库随机匹配）")
         self.pipeline_bgm_path.setToolTip(
             "可填单个音频文件，或填含多首 BGM 的文件夹。\n"
-            "勾选「随机选曲并随机截取」后，每个成品从库中稳定随机一首，并从随机起点截取匹配时长�?
+            "勾选「随机选曲并随机截取」后，每个成品从库中稳定随机一首，并从随机起点截取匹配时长。"
         )
-        bgm_file_btn = QPushButton("文件�?)
-        bgm_folder_btn = QPushButton("文件夹�?)
+        bgm_file_btn = QPushButton("文件…")
+        bgm_folder_btn = QPushButton("文件夹…")
         def _pick_bgm_file():
             path, _ = QFileDialog.getOpenFileName(
                 self, "选择背景音乐文件", "",
-                "音频 (*.mp3 *.wav *.m4a *.aac *.flac *.ogg);;所有文�?(*.*)",
+                "音频 (*.mp3 *.wav *.m4a *.aac *.flac *.ogg);;所有文件 (*.*)",
             )
             if path:
                 self.pipeline_bgm_path.setText(path)
-                self.pipeline_audio_mode.setCurrentText("视频原声＋背景音�?)
+                self.pipeline_audio_mode.setCurrentText("视频原声＋背景音乐")
         def _pick_bgm_folder():
-            path = QFileDialog.getExistingDirectory(self, "选择背景音乐文件�?)
+            path = QFileDialog.getExistingDirectory(self, "选择背景音乐文件夹")
             if path:
                 self.pipeline_bgm_path.setText(path)
-                self.pipeline_audio_mode.setCurrentText("视频原声＋背景音�?)
+                self.pipeline_audio_mode.setCurrentText("视频原声＋背景音乐")
                 self.pipeline_bgm_random.setChecked(True)
         bgm_file_btn.clicked.connect(_pick_bgm_file)
         bgm_folder_btn.clicked.connect(_pick_bgm_folder)
@@ -4329,26 +4329,26 @@ class MainWindow(QMainWindow):
         self.pipeline_bgm_random = QCheckBox("随机选曲并随机截取匹配（推荐文件夹曲库）")
         self.pipeline_bgm_random.setChecked(True)
         self.pipeline_bgm_random.setToolTip(
-            "开启：每个视频按路径哈希稳定随机一�?BGM，并从随机起点截取（�?Reels）。\n"
-            "关闭：固定使用选中文件，或文件夹内按队列顺序轮换，均从 0 秒起�?
+            "开启：每个视频按路径哈希稳定随机一首 BGM，并从随机起点截取（同 Reels）。\n"
+            "关闭：固定使用选中文件，或文件夹内按队列顺序轮换，均从 0 秒起。"
         )
         form.addRow("", self.pipeline_bgm_random)
         self.pipeline_bgm_volume = QSpinBox()
         self.pipeline_bgm_volume.setRange(1, 100)
         self.pipeline_bgm_volume.setValue(25)
         self.pipeline_bgm_volume.setSuffix(" %")
-        self.pipeline_bgm_volume.setToolTip("BGM 相对音量（原声保�?100%�?)
+        self.pipeline_bgm_volume.setToolTip("BGM 相对音量（原声保持 100%）")
         form.addRow("BGM 音量", self.pipeline_bgm_volume)
-        self.pipeline_wm_enable = QCheckBox("成品叠加水印（默�?9:16 全屏覆盖 · 不透明�?100%�?)
+        self.pipeline_wm_enable = QCheckBox("成品叠加水印（默认 9:16 全屏覆盖 · 不透明度 100%）")
         self.pipeline_wm_enable.setToolTip(
-            "�?Reels 一致：水印图强制缩放到画面尺寸后全屏覆盖（9:16 竖屏同样铺满）�?
+            "与 Reels 一致：水印图强制缩放到画面尺寸后全屏覆盖（9:16 竖屏同样铺满）。"
         )
         self.pipeline_wm_path = QLineEdit()
-        self.pipeline_wm_path.setPlaceholderText("水印�?PNG/JPG�?:16 全屏覆盖，铺满画面）")
-        wm_browse = QPushButton("浏览�?)
+        self.pipeline_wm_path.setPlaceholderText("水印图 PNG/JPG（9:16 全屏覆盖，铺满画面）")
+        wm_browse = QPushButton("浏览…")
         def _pick_wm():
             path, _ = QFileDialog.getOpenFileName(
-                self, "选择水印图片", "", "图片 (*.png *.jpg *.jpeg *.webp);;所有文�?(*.*)"
+                self, "选择水印图片", "", "图片 (*.png *.jpg *.jpeg *.webp);;所有文件 (*.*)"
             )
             if path:
                 self.pipeline_wm_path.setText(path)
@@ -4364,8 +4364,8 @@ class MainWindow(QMainWindow):
         self.pipeline_wm_opacity.setValue(100)
         self.pipeline_wm_opacity.setSuffix(" %")
         self.pipeline_wm_opacity.setToolTip("默认 100% 不透明全屏覆盖；可按需调低")
-        form.addRow("水印不透明�?, self.pipeline_wm_opacity)
-        wm_mode_hint = QLabel("水印模式：固�?9:16 全屏覆盖（scale2ref 铺满，非角落小标�?)
+        form.addRow("水印不透明度", self.pipeline_wm_opacity)
+        wm_mode_hint = QLabel("水印模式：固定 9:16 全屏覆盖（scale2ref 铺满，非角落小标）")
         wm_mode_hint.setStyleSheet("color:#7dd3fc;")
         wm_mode_hint.setWordWrap(True)
         form.addRow("", wm_mode_hint)
@@ -4373,10 +4373,10 @@ class MainWindow(QMainWindow):
         cloud_group = QGroupBox("3. Google 云端同步（只上传重命名成品）")
         cloud_layout = QVBoxLayout(cloud_group); cloud_layout.setContentsMargins(10, 9, 10, 9)
         cloud_top = QHBoxLayout()
-        self.pipeline_cloud_check = QCheckBox("流水线完成后自动上传并写入表�?)
+        self.pipeline_cloud_check = QCheckBox("流水线完成后自动上传并写入表格")
         self.pipeline_cloud_check.setChecked(self.store.data["google_sync"].get("enabled", False))
         self.pipeline_cloud_check.toggled.connect(self._pipeline_cloud_toggled)
-        cloud_config = QPushButton("打开设置与组�?)
+        cloud_config = QPushButton("打开设置与组件")
         cloud_config.clicked.connect(self._open_google_settings)
         cloud_top.addWidget(self.pipeline_cloud_check); cloud_top.addStretch(); cloud_top.addWidget(cloud_config); cloud_layout.addLayout(cloud_top)
         profile_row = QHBoxLayout(); profile_row.addWidget(QLabel("同步方案")); self.pipeline_sync_profile = NoWheelComboBox()
@@ -4385,14 +4385,14 @@ class MainWindow(QMainWindow):
         profile_row.addWidget(self.pipeline_sync_profile, 1); profile_row.addWidget(self.pipeline_save_profile); cloud_layout.addLayout(profile_row)
         self.pipeline_profile_hint = QLabel("未选择同步方案"); self.pipeline_profile_hint.setWordWrap(True); self.pipeline_profile_hint.setStyleSheet("color:#94a3b8;")
         self.pipeline_profile_hint.setVisible(False)
-        self.pipeline_variable_group = QGroupBox("本次上传选择（每次可重新选择�?)
+        self.pipeline_variable_group = QGroupBox("本次上传选择（每次可重新选择）")
         self.pipeline_variable_form = QFormLayout(self.pipeline_variable_group); self.pipeline_variable_form.setVerticalSpacing(6)
         self.pipeline_runtime_values = {}; self.pipeline_runtime_sheet = ""; self._pipeline_runtime_profile = None
         cloud_layout.addWidget(self.pipeline_variable_group)
         left_layout.addWidget(cloud_group)
         self.pipeline_resume_check = QCheckBox("自动续接未完成任务（跳过已完成的剪辑、字幕和重命名）")
         self.pipeline_resume_check.setChecked(True)
-        self.pipeline_resume_check.setToolTip("取消勾选后会创建一个全新的流水线任�?)
+        self.pipeline_resume_check.setToolTip("取消勾选后会创建一个全新的流水线任务")
         left_layout.addWidget(self.pipeline_resume_check)
         self.pipeline_progress = QProgressBar(); left_layout.addWidget(self.pipeline_progress)
         actions = QHBoxLayout(); actions.addStretch()
@@ -4403,16 +4403,16 @@ class MainWindow(QMainWindow):
 
         right = QFrame(); right.setObjectName("panel"); right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(12, 10, 12, 10); right_layout.setSpacing(7)
-        step_text = QLabel("�?智能剪辑   �?  �?提取字幕   �?  �?字幕生成标题   �?  �?批量重命名成�?  �?  �?批量上传   �?  �?批量填表")
+        step_text = QLabel("① 智能剪辑   →   ② 提取字幕   →   ③ 字幕生成标题   →   ④ 批量重命名成品   →   ⑤ 批量上传   →   ⑥ 批量填表")
         step_text.setWordWrap(True)
         step_text.setStyleSheet("color:#7dd3fc;font-size:14px;font-weight:700;padding:8px;")
         right_layout.addWidget(step_text)
-        self.pipeline_cloud_result = QLabel("云端同步：等待执�?)
+        self.pipeline_cloud_result = QLabel("云端同步：等待执行")
         self.pipeline_cloud_result.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self.pipeline_cloud_result.setOpenExternalLinks(True); self.pipeline_cloud_result.setWordWrap(True)
         self.pipeline_cloud_result.setStyleSheet("color:#86efac;padding:4px;")
         right_layout.addWidget(self.pipeline_cloud_result)
-        right_layout.addWidget(QLabel("自动引用到批量重命名的标题列�?))
+        right_layout.addWidget(QLabel("自动引用到批量重命名的标题列表"))
         self.pipeline_titles = QPlainTextEdit(); self.pipeline_titles.setReadOnly(True); self.pipeline_titles.setMinimumHeight(170)
         right_layout.addWidget(self.pipeline_titles, 1)
         right_layout.addWidget(QLabel("运行日志"))
@@ -4448,13 +4448,13 @@ class MainWindow(QMainWindow):
                 self.pending_sheet_uploads=list(resume["uploads"]); self.pending_sheet_folder_url=resume["folder_url"]
                 self.pipeline_continue_sheet.setEnabled(True)
                 self.pipeline_cloud_result.setStyleSheet("color:#fbbf24;padding:4px;")
-                self.pipeline_cloud_result.setText("检测到上次视频已上传但表格未完成，可直接点击“继续填表”�?)
+                self.pipeline_cloud_result.setText("检测到上次视频已上传但表格未完成，可直接点击“继续填表”。")
                 return
             if resume.get("status")=="upload_pending" and resume.get("files"):
                 self.pending_upload_files=list(resume["files"]); self.pending_upload_records=list(resume.get("records",[]))
                 self.pipeline_retry_upload.setEnabled(True)
                 self.pipeline_cloud_result.setStyleSheet("color:#fbbf24;padding:4px;")
-                self.pipeline_cloud_result.setText("检测到上次上传未完成；点击“继续上传”将匹配云端已有文件并从缺少项继续�?)
+                self.pipeline_cloud_result.setText("检测到上次上传未完成；点击“继续上传”将匹配云端已有文件并从缺少项继续。")
                 return
             root=Path(self.pipeline_output.text())
             checkpoints=sorted(root.rglob("pipeline_checkpoint.json"),key=lambda path:path.stat().st_mtime,reverse=True) if root.is_dir() else []
@@ -4464,7 +4464,7 @@ class MainWindow(QMainWindow):
                 if state.get("status")=="sheet_pending" and uploads and folder_url:
                     self.pending_sheet_uploads=list(uploads); self.pending_sheet_folder_url=folder_url; self.pipeline_continue_sheet.setEnabled(True)
                     self.pipeline_cloud_result.setStyleSheet("color:#fbbf24;padding:4px;")
-                    self.pipeline_cloud_result.setText("检测到上次视频已上传但表格未完成，可直接点击“继续填表”�?)
+                    self.pipeline_cloud_result.setText("检测到上次视频已上传但表格未完成，可直接点击“继续填表”。")
                     break
         except Exception:
             pass
@@ -4472,14 +4472,14 @@ class MainWindow(QMainWindow):
     def _keys_page(self):
         page, layout = self._page_shell(
             "🔑 API 密钥管理",
-            "粘贴即可自动识别（Gemini：AIza / AQ.）；也可强制指定。调用时轮询，失效自动切换�?,
+            "粘贴即可自动识别（Gemini：AIza / AQ.）；也可强制指定。调用时轮询，失效自动切换。",
         )
-        # 上方：左添加密钥 | 右申请入口（不抢下方列表高度�?
+        # 上方：左添加密钥 | 右申请入口（不抢下方列表高度）
         top_split = QSplitter(Qt.Orientation.Horizontal)
         top_split.setChildrenCollapsible(False)
         top_split.setHandleWidth(6)
 
-        # —�?左侧：添加密钥（较窄即可）—�?
+        # —— 左侧：添加密钥（较窄即可）——
         add_group = QGroupBox("添加密钥")
         add_layout = QVBoxLayout(add_group)
         add_layout.setContentsMargins(10, 10, 10, 10)
@@ -4492,17 +4492,17 @@ class MainWindow(QMainWindow):
             self.key_assign_mode.addItem(f"强制 {provider}", provider)
         self.key_assign_mode.setToolTip(
             "自动：gsk_→Groq，AIza/AQ.→Gemini，sk_→ElevenLabs，UUID→Gladia。\n"
-            "认不出会短时联网探测；仍失败请强制指定�?
+            "认不出会短时联网探测；仍失败请强制指定。"
         )
         mode_row.addWidget(self.key_assign_mode, 1)
         add_layout.addLayout(mode_row)
         self.key_bulk_input = QPlainTextEdit()
         self.key_bulk_input.setPlaceholderText(
             "每行一枚密钥，可混合服务：\n"
-            "gsk_�?�?Groq\n"
-            "AIza�?/ AQ.�?�?Gemini\n"
-            "sk_�?�?ElevenLabs\n"
-            "UUID �?Gladia"
+            "gsk_… → Groq\n"
+            "AIza… / AQ.… → Gemini\n"
+            "sk_… → ElevenLabs\n"
+            "UUID → Gladia"
         )
         self.key_bulk_input.setMinimumHeight(120)
         add_layout.addWidget(self.key_bulk_input, 1)
@@ -4511,17 +4511,17 @@ class MainWindow(QMainWindow):
         add_btn.setMinimumHeight(34)
         add_btn.clicked.connect(self._add_keys_unified)
         add_layout.addWidget(add_btn)
-        el_web_btn = QPushButton("添加 ElevenLabs 网页会话（Cookie�?)
+        el_web_btn = QPushButton("添加 ElevenLabs 网页会话（Cookie）")
         el_web_btn.setToolTip(
-            "用浏览器登录 ElevenLabs 后粘�?Cookie，可扣该账号免费点数转语音。\n"
-            "支持多个账户轮询；凭证加密保存，之后无需每次开浏览器�?
+            "用浏览器登录 ElevenLabs 后粘贴 Cookie，可扣该账号免费点数转语音。\n"
+            "支持多个账户轮询；凭证加密保存，之后无需每次开浏览器。"
         )
         el_web_btn.setMinimumHeight(32)
         el_web_btn.clicked.connect(self._add_elevenlabs_web_session)
         add_layout.addWidget(el_web_btn)
         hint = QLabel(
             "gsk_→Groq · AIza/AQ.→Gemini · sk_→ElevenLabs API · UUID→Gladia\n"
-            "ElevenLabs 推荐：网页会�?Cookie（多账户点数）或 sk_ API Key"
+            "ElevenLabs 推荐：网页会话 Cookie（多账户点数）或 sk_ API Key"
         )
         hint.setStyleSheet("color:#7dd3fc;font-size:11px;")
         hint.setWordWrap(True)
@@ -4529,8 +4529,8 @@ class MainWindow(QMainWindow):
         self.provider_inputs = {p: self.key_bulk_input for p in PROVIDERS}
         top_split.addWidget(add_group)
 
-        # —�?右侧：申请入口与说明（可滚动）—�?
-        links_group = QGroupBox("申请入口与说�?)
+        # —— 右侧：申请入口与说明（可滚动）——
+        links_group = QGroupBox("申请入口与说明")
         links_outer = QVBoxLayout(links_group)
         links_outer.setContentsMargins(8, 8, 8, 8)
         links_scroll = QScrollArea()
@@ -4542,33 +4542,33 @@ class MainWindow(QMainWindow):
         links_body_layout.setContentsMargins(4, 2, 4, 4)
         links_label = QLabel(
             "<div style='line-height:1.5;font-size:12px'>"
-            "<b>一、语音识�?ASR（密钥加在左侧）</b><br/>"
-            "�?<b>Groq</b> "
+            "<b>一、语音识别 ASR（密钥加在左侧）</b><br/>"
+            "• <b>Groq</b> "
             "<a href='https://console.groq.com/keys' style='color:#60a5fa;'>申请密钥</a> · "
-            "<a href='https://console.groq.com' style='color:#93c5fd;'>控制�?/a><br/>"
-            "�?<b>Gemini</b>（识�?配音同一 Key�?
+            "<a href='https://console.groq.com' style='color:#93c5fd;'>控制台</a><br/>"
+            "• <b>Gemini</b>（识别+配音同一 Key）"
             "<a href='https://aistudio.google.com/api-keys' style='color:#60a5fa;'>API Keys</a> · "
             "<a href='https://aistudio.google.com/' style='color:#93c5fd;'>AI Studio</a><br/>"
-            "�?<b>ElevenLabs</b>（识�?多语 TTS�?
+            "• <b>ElevenLabs</b>（识别+多语 TTS）"
             "<a href='https://elevenlabs.io/app/settings/api-keys' style='color:#60a5fa;'>API Keys</a> · "
-            "<a href='https://elevenlabs.io/app/voice-library' style='color:#93c5fd;'>音色�?/a> · "
+            "<a href='https://elevenlabs.io/app/voice-library' style='color:#93c5fd;'>音色库</a> · "
             "<a href='https://elevenlabs.io/' style='color:#93c5fd;'>官网</a><br/>"
-            "�?<b>Gladia</b> "
+            "• <b>Gladia</b> "
             "<a href='https://app.gladia.io/account' style='color:#60a5fa;'>账户/API</a> · "
             "<a href='https://docs.gladia.io/' style='color:#93c5fd;'>文档</a><br/><br/>"
             "<b>二、文字转语音 TTS</b><br/>"
-            "�?<b>微软 edge-tts</b>（免费、无需密钥；Reels 选「微软文字转语音」）"
+            "• <b>微软 edge-tts</b>（免费、无需密钥；Reels 选「微软文字转语音」）"
             "<a href='https://speech.microsoft.com/portal' style='color:#60a5fa;'>试听</a> · "
             "<a href='https://learn.microsoft.com/azure/ai-services/speech-service/language-support' style='color:#93c5fd;'>语言列表</a><br/>"
-            "�?<b>Gemini 自然语音</b> "
+            "• <b>Gemini 自然语音</b> "
             "<a href='https://ai.google.dev/gemini-api/docs/speech-generation' style='color:#60a5fa;'>文档</a><br/>"
-            "�?<b>ElevenLabs TTS</b> "
+            "• <b>ElevenLabs TTS</b> "
             "<a href='https://elevenlabs.io/docs/api-reference/text-to-speech' style='color:#60a5fa;'>TTS API</a> · "
-            "也可用左侧「网页会�?Cookie」扣账号点数（多账户�?br/>"
-            "�?<b>Azure Speech</b>（商用可选）"
+            "也可用左侧「网页会话 Cookie」扣账号点数（多账户）<br/>"
+            "• <b>Azure Speech</b>（商用可选）"
             "<a href='https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices' style='color:#60a5fa;'>创建资源</a> · "
             "<a href='https://speech.microsoft.com/' style='color:#93c5fd;'>官网</a><br/><br/>"
-            "<b>三、本地识�?/b>：设置与组件安装 Whisper，无需密钥�?
+            "<b>三、本地识别</b>：设置与组件安装 Whisper，无需密钥。"
             "</div>"
         )
         links_label.setOpenExternalLinks(True)
@@ -4590,7 +4590,7 @@ class MainWindow(QMainWindow):
         top_split.setStretchFactor(0, 2)
         top_split.setStretchFactor(1, 3)
         top_split.setSizes([360, 560])
-        # 限制上半区高度，把空间留给密钥列�?
+        # 限制上半区高度，把空间留给密钥列表
         top_wrap = QWidget()
         top_wrap_layout = QVBoxLayout(top_wrap)
         top_wrap_layout.setContentsMargins(0, 0, 0, 0)
@@ -4599,18 +4599,18 @@ class MainWindow(QMainWindow):
         top_wrap.setMinimumHeight(200)
         layout.addWidget(top_wrap, 0)
 
-        # —�?下方：密钥列表（主要区域）—�?
+        # —— 下方：密钥列表（主要区域）——
         panel = QFrame()
         panel.setObjectName("panel")
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(10, 10, 10, 10)
         panel_layout.setSpacing(6)
-        list_title = QLabel("已添加密钥列�?)
+        list_title = QLabel("已添加密钥列表")
         list_title.setStyleSheet("font-weight:700;color:#f1f5f9;")
         panel_layout.addWidget(list_title)
         self.key_table = QTableWidget(0, 7)
         self.key_table.setHorizontalHeaderLabels(
-            ["服务", "密钥", "状�?, "上次检�?, "使用次数", "异常原因", "ID"]
+            ["服务", "密钥", "状态", "上次检测", "使用次数", "异常原因", "ID"]
         )
         header = self.key_table.horizontalHeader()
         for column in range(5):
@@ -4624,7 +4624,7 @@ class MainWindow(QMainWindow):
         buttons = QHBoxLayout()
         check_selected = QPushButton("检测选中")
         check_selected.clicked.connect(self._check_selected_keys)
-        check_all = QPushButton("检测全�?)
+        check_all = QPushButton("检测全部")
         check_all.clicked.connect(self._check_all_keys)
         details = QPushButton("查看异常详情")
         details.clicked.connect(self._show_selected_key_error)
@@ -4641,7 +4641,7 @@ class MainWindow(QMainWindow):
         panel_layout.addLayout(buttons)
         layout.addWidget(panel, 1)
 
-        note = QLabel("安全提示：配置文件为本机明文保存，请勿共享该文件或整个用户配置目录�?)
+        note = QLabel("安全提示：配置文件为本机明文保存，请勿共享该文件或整个用户配置目录。")
         note.setStyleSheet("color:#f59e0b;font-size:11px;")
         layout.addWidget(note)
         return page
@@ -4650,13 +4650,13 @@ class MainWindow(QMainWindow):
         requested_index = index
         nav_index = index
         if index == 6 and hasattr(self, "settings_page"):
-            # 旧的“密钥管理”入口统一落到设置页中的独立标签，避免重复顶栏入口�?
+            # 旧的“密钥管理”入口统一落到设置页中的独立标签，避免重复顶栏入口。
             index = 7
             nav_index = 7
             self.settings_page.setCurrentWidget(self.key_settings_page)
         self.pages.setCurrentIndex(index)
-        page_names={0:"首页",1:"格式转换",2:"智能剪辑",3:"Reels 编辑�?,4:"批量重命�?,5:"字幕提取",
-                    6:"密钥管理",7:"设置与组�?,8:"自动流水�?,9:"帮助",10:"清除元数�?,11:"文字转语�?}
+        page_names={0:"首页",1:"格式转换",2:"智能剪辑",3:"Reels 编辑器",4:"批量重命名",5:"字幕提取",
+                    6:"密钥管理",7:"设置与组件",8:"自动流水线",9:"帮助",10:"清除元数据",11:"文字转语音"}
         write_app_log(f"切换页面：{page_names.get(requested_index,requested_index)}","INFO","界面")
         for btn in self.nav_buttons:
             btn.setChecked(int(btn.property("pageIndex")) == nav_index)
@@ -4675,15 +4675,15 @@ class MainWindow(QMainWindow):
             self.rename_page.titles.clear()
         self._show_page(4)
         self.rename_page.input.setFocus()
-        write_app_log(f"Reels 成品已加入批量重命名：{path.resolve()}","INFO","批量重命�?)
+        write_app_log(f"Reels 成品已加入批量重命名：{path.resolve()}","INFO","批量重命名")
 
     def _launch_tool(self, relative):
         if relative.startswith("page:"):
             self._show_page(int(relative.split(":", 1)[1]))
 
     def _add_media(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "选择视频或音�?, "",
-            "媒体文件 (*.mp4 *.mov *.mkv *.avi *.wmv *.webm *.m4v *.mp3 *.wav *.m4a *.flac *.aac *.ogg);;所有文�?(*.*)")
+        files, _ = QFileDialog.getOpenFileNames(self, "选择视频或音频", "",
+            "媒体文件 (*.mp4 *.mov *.mkv *.avi *.wmv *.webm *.m4v *.mp3 *.wav *.m4a *.flac *.aac *.ogg);;所有文件 (*.*)")
         self._add_media_paths(files)
 
     def _add_media_folder(self):
@@ -4721,15 +4721,15 @@ class MainWindow(QMainWindow):
             if path not in existing:
                 self.file_list.addItem(path); existing.add(path); added += 1
         if added:
-            source = f"，来�?{folder_count} 个文件夹" if folder_count else ""
-            self.media_source_hint.setText(f"新增 {added} 个{source}；共 {self.file_list.count()} �?)
+            source = f"，来自 {folder_count} 个文件夹" if folder_count else ""
+            self.media_source_hint.setText(f"新增 {added} 个{source}；共 {self.file_list.count()} 个")
         elif paths:
-            self.media_source_hint.setText("没有发现新媒体（可能重复或格式不支持�?)
+            self.media_source_hint.setText("没有发现新媒体（可能重复或格式不支持）")
 
     def _remove_selected_media(self):
         for index in self.file_list.selectedIndexes()[::-1]:
             self.file_list.takeItem(index.row())
-        self.media_source_hint.setText(f"�?{self.file_list.count()} �?)
+        self.media_source_hint.setText(f"共 {self.file_list.count()} 个")
 
 
 
@@ -4739,7 +4739,7 @@ class MainWindow(QMainWindow):
         self._pipeline_add_paths(files)
 
     def _pipeline_choose_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择原始视频文件�?)
+        folder = QFileDialog.getExistingDirectory(self, "选择原始视频文件夹")
         if folder: self._pipeline_add_paths([folder])
 
     def _pipeline_add_paths(self, paths):
@@ -4760,20 +4760,20 @@ class MainWindow(QMainWindow):
 
 
     def _pipeline_choose_output(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择流水线输出目�?, self.pipeline_output.text())
+        folder = QFileDialog.getExistingDirectory(self, "选择流水线输出目录", self.pipeline_output.text())
         if folder: self.pipeline_output.setText(folder)
 
     def _pipeline_cloud_toggled(self, checked):
         self.store.data["google_sync"]["enabled"] = bool(checked)
         self.store.save()
-        self.pipeline_cloud_result.setText("云端同步：已开�? if checked else "云端同步：已关闭")
+        self.pipeline_cloud_result.setText("云端同步：已开启" if checked else "云端同步：已关闭")
 
     def _save_pipeline_sync_profile(self):
         current_name=self.pipeline_sync_profile.currentData()
         if current_name:
             name=current_name
         else:
-            name,ok=QInputDialog.getText(self,"保存同步方案","方案名称�?,text="方案1")
+            name,ok=QInputDialog.getText(self,"保存同步方案","方案名称：",text="方案1")
             if not ok or not name.strip(): return
             name=name.strip()
         config=self._selected_sync_config(); config["enabled"]=self.pipeline_cloud_check.isChecked()
@@ -4783,7 +4783,7 @@ class MainWindow(QMainWindow):
         if hasattr(self,"google_settings_page"): self.google_settings_page.load_current()
         self._refresh_pipeline_profiles(); index=self.pipeline_sync_profile.findData(name)
         if index>=0: self.pipeline_sync_profile.setCurrentIndex(index)
-        QMessageBox.information(self,"方案已保�?,f"当前写入 Sheet 和本次选择已同步保存到方案“{name}”�?)
+        QMessageBox.information(self,"方案已保存",f"当前写入 Sheet 和本次选择已同步保存到方案“{name}”。")
 
     def _open_google_settings(self):
         self._show_page(7)
@@ -4841,12 +4841,12 @@ class MainWindow(QMainWindow):
         current_sheet=base.get("sheet_name","")
         if current_sheet and current_sheet not in sheet_names: sheet_names.insert(0,current_sheet)
         self.pipeline_target_sheet.addItems(sheet_names); self.pipeline_target_sheet.setCurrentText(current_sheet)
-        self.pipeline_target_sheet.lineEdit().setPlaceholderText("选择或输入写�?Sheet 名称")
+        self.pipeline_target_sheet.lineEdit().setPlaceholderText("选择或输入写入 Sheet 名称")
         self.pipeline_target_sheet.currentTextChanged.connect(self._pipeline_sheet_changed)
         self.pipeline_variable_form.addRow("写入 Sheet",self.pipeline_target_sheet)
         for item in base.get("variable_fields",[]):
-            field=item.get("field","选择�?); options=[str(v) for v in item.get("options",[]) if str(v).strip()]
-            combo=NoWheelComboBox(); combo.setEditable(False); combo.addItem("请选择�?,""); combo.addItems(options)
+            field=item.get("field","选择项"); options=[str(v) for v in item.get("options",[]) if str(v).strip()]
+            combo=NoWheelComboBox(); combo.setEditable(False); combo.addItem("请选择…",""); combo.addItems(options)
             selected=item.get("selected",""); index=combo.findText(selected); combo.setCurrentIndex(index if index>=0 else 0)
             combo.currentTextChanged.connect(lambda value,f=field:self._pipeline_variable_changed(f,value))
             combo.setEnabled(bool(options)); combo.setToolTip("选项来自 Google 配置 Sheet" if options else "请先在设置与组件中从配置 Sheet 刷新选项")
@@ -4855,7 +4855,7 @@ class MainWindow(QMainWindow):
         self._update_pipeline_profile_hint()
 
     def _pipeline_variable_changed(self, field, value):
-        self.pipeline_runtime_values[field]="" if value=="请选择�? else value
+        self.pipeline_runtime_values[field]="" if value=="请选择…" else value
         self._update_pipeline_profile_hint()
 
     def _pipeline_sheet_changed(self, value):
@@ -4864,35 +4864,35 @@ class MainWindow(QMainWindow):
 
     def _update_pipeline_profile_hint(self):
         config = self._selected_sync_config(); profile = self.pipeline_sync_profile.currentData() or "当前设置"
-        sheet = config.get("sheet_name", "") or "未填�?Sheet"
-        table_id = extract_google_id(config.get("spreadsheet_id", "")) or "未填写表�?
+        sheet = config.get("sheet_name", "") or "未填写 Sheet"
+        table_id = extract_google_id(config.get("spreadsheet_id", "")) or "未填写表格"
         selected = [f"{item.get('field')}={item.get('selected')}" for item in config.get("variable_fields", []) if item.get("selected")]
-        extra = "�? + "�?.join(selected) if selected else ""
-        self.pipeline_profile_hint.setText(f"{profile} �?表格 {table_id} / Sheet：{sheet}{extra}")
+        extra = "；" + "，".join(selected) if selected else ""
+        self.pipeline_profile_hint.setText(f"{profile} → 表格 {table_id} / Sheet：{sheet}{extra}")
 
     def _open_google_sync_dialog(self):
         config = dict(self.store.data["google_sync"])
         dialog = QDialog(self); dialog.setWindowTitle("Google 云端同步配置"); dialog.resize(680, 760)
         root = QVBoxLayout(dialog)
-        note = QLabel("使用服务账号 JSON。请先把 Drive 父文件夹�?Google 表格共享�?JSON 中的 client_email。\n"
-                      "流水线只上传�?3_重命名成品”中的最终视频，中间片段和字幕不会上传�?)
+        note = QLabel("使用服务账号 JSON。请先把 Drive 父文件夹和 Google 表格共享给 JSON 中的 client_email。\n"
+                      "流水线只上传“03_重命名成品”中的最终视频，中间片段和字幕不会上传。")
         note.setWordWrap(True); note.setStyleSheet("color:#7dd3fc;"); root.addWidget(note)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); container = QWidget(); form = QFormLayout(container)
         json_edit = QLineEdit(config.get("json_path", "")); json_row = QHBoxLayout(); json_row.addWidget(json_edit)
-        browse_json = QPushButton("选择 JSON�?)
+        browse_json = QPushButton("选择 JSON…")
         browse_json.clicked.connect(lambda: json_edit.setText(QFileDialog.getOpenFileName(
             dialog, "选择 Google 服务账号 JSON", "", "JSON (*.json)")[0] or json_edit.text()))
         json_row.addWidget(browse_json); json_widget = QWidget(); json_widget.setLayout(json_row)
         form.addRow("服务账号 JSON", json_widget)
-        parent_edit = QLineEdit(config.get("parent_folder", "")); parent_edit.setPlaceholderText("Drive 父文件夹 ID 或链�?)
+        parent_edit = QLineEdit(config.get("parent_folder", "")); parent_edit.setPlaceholderText("Drive 父文件夹 ID 或链接")
         form.addRow("云端父文件夹", parent_edit)
-        auth_row = QHBoxLayout(); auth_status = QLabel("尚未检查授�?); auth_status.setWordWrap(True)
-        authorize = QPushButton("授权 / 检查权�?); auth_row.addWidget(auth_status, 1); auth_row.addWidget(authorize)
+        auth_row = QHBoxLayout(); auth_status = QLabel("尚未检查授权"); auth_status.setWordWrap(True)
+        authorize = QPushButton("授权 / 检查权限"); auth_row.addWidget(auth_status, 1); auth_row.addWidget(authorize)
         auth_widget = QWidget(); auth_widget.setLayout(auth_row); form.addRow("Google 权限", auth_widget)
         def authorize_google():
             temporary = dict(config); temporary.update({"json_path": json_edit.text().strip(),
                                                          "parent_folder": parent_edit.text().strip()})
-            authorize.setEnabled(False); auth_status.setText("正在授权并检查权限�?)
+            authorize.setEnabled(False); auth_status.setText("正在授权并检查权限…")
             QApplication.processEvents()
             try:
                 identity = test_google_authorization(temporary, interactive=True)
@@ -4902,27 +4902,27 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(dialog, "Google 授权失败", str(exc))
             finally: authorize.setEnabled(True)
         authorize.clicked.connect(authorize_google)
-        mode_combo = QComboBox(); mode_combo.addItems(["视频名称", "自定义名�?])
-        mode_combo.setCurrentText(config.get("folder_mode", "视频名称")); form.addRow("任务文件夹命�?, mode_combo)
+        mode_combo = QComboBox(); mode_combo.addItems(["视频名称", "自定义名称"])
+        mode_combo.setCurrentText(config.get("folder_mode", "视频名称")); form.addRow("任务文件夹命名", mode_combo)
         custom_name = QLineEdit(config.get("custom_folder_name", "")); custom_name.setPlaceholderText("选择自定义名称时使用")
-        form.addRow("自定义名�?, custom_name)
+        form.addRow("自定义名称", custom_name)
         public_check = QCheckBox("允许知道链接的用户查看云端任务文件夹")
         public_check.setChecked(config.get("public_link", False)); form.addRow("共享权限", public_check)
-        sheet_check = QCheckBox("上传完成后写�?Google Sheets")
+        sheet_check = QCheckBox("上传完成后写入 Google Sheets")
         sheet_check.setChecked(config.get("write_sheet", False)); form.addRow("表格同步", sheet_check)
         profiles = {name: dict(value) for name, value in config.get("sheet_profiles", {}).items()}
-        profile_row = QHBoxLayout(); profile_combo = QComboBox(); profile_combo.addItem("选择已保存表格方案�?)
+        profile_row = QHBoxLayout(); profile_combo = QComboBox(); profile_combo.addItem("选择已保存表格方案…")
         profile_combo.addItems(profiles.keys())
         save_profile = QPushButton("保存当前方案"); delete_profile = QPushButton("删除方案")
         profile_row.addWidget(profile_combo, 1); profile_row.addWidget(save_profile); profile_row.addWidget(delete_profile)
         profile_widget = QWidget(); profile_widget.setLayout(profile_row); form.addRow("表格方案", profile_widget)
-        spreadsheet = QLineEdit(config.get("spreadsheet_id", "")); spreadsheet.setPlaceholderText("表格 ID 或完整链�?)
-        sheet_name = QLineEdit(config.get("sheet_name", "")); sheet_name.setPlaceholderText("例如：AS-批量视频版权�?)
+        spreadsheet = QLineEdit(config.get("spreadsheet_id", "")); spreadsheet.setPlaceholderText("表格 ID 或完整链接")
+        sheet_name = QLineEdit(config.get("sheet_name", "")); sheet_name.setPlaceholderText("例如：AS-批量视频版权表")
         insert_row = QSpinBox(); insert_row.setRange(1, 100000); insert_row.setValue(int(config.get("insert_row", 4)))
-        form.addRow("表格 ID", spreadsheet); form.addRow("Sheet 名称", sheet_name); form.addRow("数据插入�?, insert_row)
+        form.addRow("表格 ID", spreadsheet); form.addRow("Sheet 名称", sheet_name); form.addRow("数据插入行", insert_row)
 
         variable_fields = [dict(item) for item in config.get("variable_fields", [])]
-        variable_group = QGroupBox("本次上传选择（每次上传可重新选择�?)
+        variable_group = QGroupBox("本次上传选择（每次上传可重新选择）")
         variable_layout = QVBoxLayout(variable_group); variable_rows = QFormLayout(); variable_layout.addLayout(variable_rows)
         variable_combos = []
         def clear_form_layout(layout_to_clear):
@@ -4941,31 +4941,31 @@ class MainWindow(QMainWindow):
                 combo.addItems(options); combo.setEditable(True)
                 combo.setCurrentText(str(item.get("selected", options[0] if options else "")))
                 variable_combos.append(combo)
-                variable_rows.addRow(f"{item.get('field', '选择�?)}（{item.get('column', '')}列）", combo)
+                variable_rows.addRow(f"{item.get('field', '选择项')}（{item.get('column', '')}列）", combo)
             if not variable_fields:
-                variable_rows.addRow(QLabel("尚未配置非固定字段；点击右侧按钮添加�?))
+                variable_rows.addRow(QLabel("尚未配置非固定字段；点击右侧按钮添加。"))
         configure_variables = QPushButton("配置下拉字段和选项")
         variable_layout.addWidget(configure_variables, 0, Qt.AlignmentFlag.AlignRight)
         form.addRow(variable_group)
         def configure_variable_fields():
             nonlocal variable_fields
-            editor = QDialog(dialog); editor.setWindowTitle("配置每次上传需要选择的字�?); editor.resize(650, 460)
+            editor = QDialog(dialog); editor.setWindowTitle("配置每次上传需要选择的字段"); editor.resize(650, 460)
             editor_layout = QVBoxLayout(editor)
-            hint = QLabel("这些字段不会固定在表格方案中；每次上传前从下拉框选择。选项�?| 分隔�?)
+            hint = QLabel("这些字段不会固定在表格方案中；每次上传前从下拉框选择。选项用 | 分隔。")
             hint.setWordWrap(True); editor_layout.addWidget(hint)
-            table = QTableWidget(0, 3); table.setHorizontalHeaderLabels(["字段名称", "写入�?, "下拉选项（用 | 分隔�?])
+            table = QTableWidget(0, 3); table.setHorizontalHeaderLabels(["字段名称", "写入列", "下拉选项（用 | 分隔）"])
             table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
             table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
             table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
             for item in read_variable_fields():
                 row = table.rowCount(); table.insertRow(row)
-                table.setItem(row, 0, QTableWidgetItem(str(item.get("field", "选择�?))))
+                table.setItem(row, 0, QTableWidgetItem(str(item.get("field", "选择项"))))
                 table.setItem(row, 1, QTableWidgetItem(str(item.get("column", ""))))
                 table.setItem(row, 2, QTableWidgetItem(" | ".join(item.get("options", []))))
             editor_layout.addWidget(table, 1)
             edit_buttons = QHBoxLayout(); add_row = QPushButton("新增字段"); remove_row = QPushButton("删除选中")
             add_row.clicked.connect(lambda: (table.insertRow(table.rowCount()),
-                                              table.setItem(table.rowCount()-1, 0, QTableWidgetItem("选择�?)),
+                                              table.setItem(table.rowCount()-1, 0, QTableWidgetItem("选择项")),
                                               table.setItem(table.rowCount()-1, 1, QTableWidgetItem("")),
                                               table.setItem(table.rowCount()-1, 2, QTableWidgetItem(""))))
             def remove_rows():
@@ -4990,19 +4990,19 @@ class MainWindow(QMainWindow):
         columns_group = QGroupBox("字段与列映射（名称、列、填写内容合并配置）")
         columns_layout = QVBoxLayout(columns_group)
         mapping_table = QTableWidget(0, 3)
-        mapping_table.setHorizontalHeaderLabels(["字段名称", "写入�?, "固定内容 / 自动来源"])
+        mapping_table.setHorizontalHeaderLabels(["字段名称", "写入列", "固定内容 / 自动来源"])
         mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         mapping_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         mapping_table.setMinimumHeight(330); mapping_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        source_labels = {"date": "自动：当天日�?, "file": "自动：文件名与云端链�?,
-                         "chinese": "自动：中文字�?, "original": "自动：识别原�?葡语",
+        source_labels = {"date": "自动：当天日期", "file": "自动：文件名与云端链接",
+                         "chinese": "自动：中文字幕", "original": "自动：识别原文/葡语",
                          "folder": "自动：云端任务文件夹链接"}
         def load_mapping_table(mappings):
             mapping_table.setRowCount(0)
             for mapping in mappings:
                 row = mapping_table.rowCount(); mapping_table.insertRow(row)
-                field_item = QTableWidgetItem(str(mapping.get("field", "自定义字�?)))
+                field_item = QTableWidgetItem(str(mapping.get("field", "自定义字段")))
                 source = mapping.get("source", "static"); field_item.setData(Qt.ItemDataRole.UserRole, source)
                 column_item = QTableWidgetItem(str(mapping.get("column", "")))
                 value_item = QTableWidgetItem(source_labels.get(source, str(mapping.get("value", ""))))
@@ -5018,7 +5018,7 @@ class MainWindow(QMainWindow):
                 value_item = mapping_table.item(row, 2); source = field_item.data(Qt.ItemDataRole.UserRole) or "static"
                 column = column_item.text().strip().upper() if column_item else ""
                 if not column: continue
-                mappings.append({"field": field_item.text().strip() or "自定义字�?, "column": column,
+                mappings.append({"field": field_item.text().strip() or "自定义字段", "column": column,
                                  "source": source, "value": value_item.text() if source == "static" and value_item else ""})
             return mappings
         load_mapping_table(config.get("sheet_mappings", DEFAULT_SHEET_MAPPINGS))
@@ -5027,7 +5027,7 @@ class MainWindow(QMainWindow):
         reset_mapping = QPushButton("恢复默认映射")
         def add_mapping_row():
             row = mapping_table.rowCount(); mapping_table.insertRow(row)
-            field = QTableWidgetItem("自定义字�?); field.setData(Qt.ItemDataRole.UserRole, "static")
+            field = QTableWidgetItem("自定义字段"); field.setData(Qt.ItemDataRole.UserRole, "static")
             mapping_table.setItem(row, 0, field); mapping_table.setItem(row, 1, QTableWidgetItem(""))
             mapping_table.setItem(row, 2, QTableWidgetItem("")); mapping_table.setCurrentCell(row, 0)
         def delete_mapping_rows():
@@ -5054,22 +5054,22 @@ class MainWindow(QMainWindow):
             rebuild_variable_rows()
         def save_current_profile():
             default_name = sheet_name.text().strip() or "表格方案"
-            name, ok = QInputDialog.getText(dialog, "保存表格方案", "方案名称�?, text=default_name)
+            name, ok = QInputDialog.getText(dialog, "保存表格方案", "方案名称：", text=default_name)
             if not ok: return
             name = name.strip()
             if not name:
-                QMessageBox.information(dialog, "无法保存", "请输入方案名称�?)
+                QMessageBox.information(dialog, "无法保存", "请输入方案名称。")
                 return
             try:
                 profiles[name] = current_sheet_profile()
-                # “保存当前方案”应立即持久化，不要求用户再点击弹窗底部�?Save�?
+                # “保存当前方案”应立即持久化，不要求用户再点击弹窗底部的 Save。
                 google_config = self.store.data.setdefault("google_sync", {})
                 google_config["sheet_profiles"] = {key: dict(value) for key, value in profiles.items()}
                 google_config["active_sheet_profile"] = name
                 self.store.save()
                 if profile_combo.findText(name) < 0: profile_combo.addItem(name)
                 profile_combo.setCurrentText(name)
-                QMessageBox.information(dialog, "保存成功", f"表格方案“{name}”已保存�?)
+                QMessageBox.information(dialog, "保存成功", f"表格方案“{name}”已保存。")
             except Exception as exc:
                 QMessageBox.critical(dialog, "保存方案失败", f"无法写入配置：\n{exc}")
         def delete_current_profile():
@@ -5083,7 +5083,7 @@ class MainWindow(QMainWindow):
                         google_config["active_sheet_profile"] = ""
                     self.store.save()
                     profile_combo.removeItem(profile_combo.currentIndex())
-                    QMessageBox.information(dialog, "删除成功", f"表格方案“{name}”已删除�?)
+                    QMessageBox.information(dialog, "删除成功", f"表格方案“{name}”已删除。")
                 except Exception as exc:
                     QMessageBox.critical(dialog, "删除方案失败", f"无法写入配置：\n{exc}")
         profile_combo.currentTextChanged.connect(apply_sheet_profile)
@@ -5111,19 +5111,19 @@ class MainWindow(QMainWindow):
     def _pipeline_start(self):
         sources = [self.pipeline_files.item(i).text() for i in range(self.pipeline_files.count())]
         if not sources:
-            QMessageBox.information(self, "没有视频", "请先添加 Canva、HeyGen 或其他来源的视频�?)
+            QMessageBox.information(self, "没有视频", "请先添加 Canva、HeyGen 或其他来源的视频。")
             return
         if self.thread:
             try:
                 if self.thread.isRunning():
-                    QMessageBox.information(self, "任务进行�?, "请等待当前任务结束�?)
+                    QMessageBox.information(self, "任务进行中", "请等待当前任务结束。")
                     return
             except RuntimeError:
                 self.thread = None
         selected = self.pipeline_provider.currentText()
         provider = self._resolve_provider() if selected == AUTO_PROVIDER else selected
         if provider != LOCAL_PROVIDER and not self.store.has_candidates(provider):
-            QMessageBox.information(self, "缺少密钥", f"{provider} 没有可用密钥，请先添加并检测�?)
+            QMessageBox.information(self, "缺少密钥", f"{provider} 没有可用密钥，请先添加并检测。")
             self._show_page(6); return
         try: ffmpeg = self._find_ffmpeg()
         except Exception as exc: QMessageBox.critical(self, "缺少组件", str(exc)); return
@@ -5131,12 +5131,12 @@ class MainWindow(QMainWindow):
         cloud_config["enabled"] = self.pipeline_cloud_check.isChecked()
         if cloud_config["enabled"]:
             if not Path(cloud_config.get("json_path", "")).is_file() or not extract_google_id(cloud_config.get("parent_folder", "")):
-                QMessageBox.warning(self, "Google 同步配置不完�?,
-                                    "请配置有效的服务账号 JSON �?Drive 父文件夹 ID/链接�?)
+                QMessageBox.warning(self, "Google 同步配置不完整",
+                                    "请配置有效的服务账号 JSON 和 Drive 父文件夹 ID/链接。")
                 self._open_google_settings(); return
             if cloud_config.get("write_sheet") and (not extract_google_id(cloud_config.get("spreadsheet_id", ""))
                                                      or not cloud_config.get("sheet_name", "").strip()):
-                QMessageBox.warning(self, "表格配置不完�?, "请填�?Google 表格 ID �?Sheet 名称�?)
+                QMessageBox.warning(self, "表格配置不完整", "请填写 Google 表格 ID 和 Sheet 名称。")
                 self._open_google_settings(); return
         model = self.store.data["models"].get(provider, DEFAULT_MODELS[provider])
         self.subtitle_results.clear(); self.result_combo.clear(); self.result_combo.addItem(ALL_RESULTS_LABEL)
@@ -5144,7 +5144,7 @@ class MainWindow(QMainWindow):
         self.thread = QThread(self)
         audio_mode = (
             self.pipeline_audio_mode.currentText()
-            if hasattr(self, "pipeline_audio_mode") else "仅视频原�?
+            if hasattr(self, "pipeline_audio_mode") else "仅视频原声"
         )
         extras = {
             "audio_mode": audio_mode,
@@ -5195,12 +5195,12 @@ class MainWindow(QMainWindow):
         self.pending_sheet_uploads=[]; self.pending_sheet_folder_url=""; self.pipeline_continue_sheet.setEnabled(False)
         self.store.data.pop("cloud_resume",None); self.store.save()
         self.pipeline_cloud_result.setText(
-            f'云端同步完成：{summary}<br><a href="{folder_url}">打开 Google Drive 文件�?/a>')
+            f'云端同步完成：{summary}<br><a href="{folder_url}">打开 Google Drive 文件夹</a>')
         if hasattr(self, "dynamic_caption_page"):
             sheet_url = f"https://docs.google.com/spreadsheets/d/{extract_google_id(self._selected_sync_config().get('spreadsheet_id', ''))}"
             self.dynamic_caption_page._append_run_log(
                 f"[云端同步成功] {summary}\n"
-                f"Google Drive 文件夹链�? {folder_url}\n"
+                f"Google Drive 文件夹链接: {folder_url}\n"
                 f"Google Sheets 表格链接: {sheet_url}"
             )
             self.dynamic_caption_page.cloud_sync_hint.setText(
@@ -5218,11 +5218,11 @@ class MainWindow(QMainWindow):
         self.pipeline_continue_sheet.setEnabled(bool(self.pending_sheet_uploads))
         self.pipeline_cloud_result.setStyleSheet("color:#fbbf24;padding:4px;")
         self.pipeline_cloud_result.setText(
-            f'视频已上传成功，但写入表格失败：{error}<br><a href="{folder_url}">打开 Google Drive 文件�?/a><br>修正配置后点击“继续填表”，不会重新上传视频�?)
+            f'视频已上传成功，但写入表格失败：{error}<br><a href="{folder_url}">打开 Google Drive 文件夹</a><br>修正配置后点击“继续填表”，不会重新上传视频。')
         if hasattr(self, "dynamic_caption_page"):
             self.dynamic_caption_page._append_run_log(
-                f"[云端同步未完全成功] 视频已全部上传成功，但写�?Google Sheets 发生错误：{error}\n"
-                f"Google Drive 文件夹链�? {folder_url}"
+                f"[云端同步未完全成功] 视频已全部上传成功，但写入 Google Sheets 发生错误：{error}\n"
+                f"Google Drive 文件夹链接: {folder_url}"
             )
             self.dynamic_caption_page.cloud_sync_hint.setText(
                 f'已上传但写入表格失败：{error}<br>'
@@ -5242,20 +5242,20 @@ class MainWindow(QMainWindow):
         self.store.data["cloud_resume"]={"status":"upload_pending","files":list(self.pending_upload_files),
                                          "records":list(self.pending_upload_records)}
         self.store.save()
-        self.pipeline_cloud_result.setText(f"云端同步失败，但本地视频已处理完成：{error}<br>可点击“继续上传”�?)
+        self.pipeline_cloud_result.setText(f"云端同步失败，但本地视频已处理完成：{error}<br>可点击“继续上传”。")
         self.pipeline_cloud_result.setStyleSheet("color:#fca5a5;padding:4px;")
 
     def _manual_upload_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "选择需要上传的重命名成�?, "",
+        files, _ = QFileDialog.getOpenFileNames(self, "选择需要上传的重命名成品", "",
                                                  "视频 (*.mp4 *.mov *.mkv *.avi *.wmv *.webm *.m4v *.flv *.ts)")
         if files: self._start_cloud_upload(files)
 
     def _manual_upload_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择重命名成品目�?)
+        folder = QFileDialog.getExistingDirectory(self, "选择重命名成品目录")
         if not folder: return
         selected_folder = Path(folder)
-        if selected_folder.name != "03_重命名成�?:
-            product_folders = sorted((path for path in selected_folder.rglob("03_重命名成�?) if path.is_dir()),
+        if selected_folder.name != "03_重命名成品":
+            product_folders = sorted((path for path in selected_folder.rglob("03_重命名成品") if path.is_dir()),
                                      key=lambda path: path.stat().st_mtime, reverse=True)
             if product_folders:
                 selected_folder = product_folders[0]
@@ -5263,7 +5263,7 @@ class MainWindow(QMainWindow):
         extensions = {".mp4", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".m4v", ".flv", ".ts"}
         files = [str(path) for path in sorted(selected_folder.rglob("*"), key=lambda path: natural_path_key(path.name))
                  if path.is_file() and path.suffix.lower() in extensions]
-        if not files: QMessageBox.information(self, "没有成品", "所选目录中没有找到视频文件�?)
+        if not files: QMessageBox.information(self, "没有成品", "所选目录中没有找到视频文件。")
         else: self._start_cloud_upload(files)
 
     def _retry_cloud_upload(self):
@@ -5274,12 +5274,12 @@ class MainWindow(QMainWindow):
         if self.cloud_thread:
             try:
                 if self.cloud_thread.isRunning():
-                    QMessageBox.information(self,"任务进行�?,"请等待当前云端任务结束�?)
+                    QMessageBox.information(self,"任务进行中","请等待当前云端任务结束。")
                     return
             except RuntimeError: self.cloud_thread=None
         config=self._selected_sync_config(); config["enabled"]=True; config["write_sheet"]=True
         if not extract_google_id(config.get("spreadsheet_id","")) or not config.get("sheet_name","").strip():
-            QMessageBox.warning(self,"表格配置不完�?,"请选择写入 Sheet 并确认表�?ID�?)
+            QMessageBox.warning(self,"表格配置不完整","请选择写入 Sheet 并确认表格 ID。")
             return
         self.cloud_thread=QThread(self); self.cloud_worker=SheetFillWorker(config,list(self.pending_sheet_uploads),self.pending_sheet_folder_url)
         self.cloud_worker.moveToThread(self.cloud_thread); self.cloud_thread.started.connect(self.cloud_worker.run)
@@ -5289,7 +5289,7 @@ class MainWindow(QMainWindow):
         self.cloud_worker.finished.connect(self._sheet_fill_done)
         self.cloud_worker.finished.connect(self.cloud_thread.quit); self.cloud_thread.finished.connect(self._cloud_thread_ended); self.cloud_thread.finished.connect(self.cloud_thread.deleteLater)
         self.pipeline_continue_sheet.setEnabled(False); self.pipeline_stop_upload.setEnabled(False)
-        self.pipeline_cloud_result.setStyleSheet("color:#7dd3fc;padding:4px;"); self.pipeline_cloud_result.setText("正在继续填写 Google Sheets，不会重新上传视频�?)
+        self.pipeline_cloud_result.setStyleSheet("color:#7dd3fc;padding:4px;"); self.pipeline_cloud_result.setText("正在继续填写 Google Sheets，不会重新上传视频…")
         self.cloud_thread.start()
 
     def _sheet_fill_done(self, ok, folder_url, message):
@@ -5298,12 +5298,12 @@ class MainWindow(QMainWindow):
             self.pending_sheet_uploads=[]; self.pending_sheet_folder_url=""; self.pipeline_continue_sheet.setEnabled(False)
             self.store.data.pop("cloud_resume",None); self.store.save()
             self.pipeline_cloud_result.setStyleSheet("color:#86efac;padding:4px;")
-            self.pipeline_cloud_result.setText(f'{message}<br><a href="{folder_url}">打开 Google Drive 文件�?/a>')
+            self.pipeline_cloud_result.setText(f'{message}<br><a href="{folder_url}">打开 Google Drive 文件夹</a>')
             if hasattr(self, "dynamic_caption_page"):
                 sheet_url = f"https://docs.google.com/spreadsheets/d/{extract_google_id(self._selected_sync_config().get('spreadsheet_id', ''))}"
                 self.dynamic_caption_page._append_run_log(
                     f"[云端同步成功] {message}\n"
-                    f"Google Drive 文件夹链�? {folder_url}\n"
+                    f"Google Drive 文件夹链接: {folder_url}\n"
                     f"Google Sheets 表格链接: {sheet_url}"
                 )
                 self.dynamic_caption_page.cloud_sync_hint.setText(
@@ -5314,7 +5314,7 @@ class MainWindow(QMainWindow):
         else:
             self.pipeline_continue_sheet.setEnabled(bool(self.pending_sheet_uploads))
             self.pipeline_cloud_result.setStyleSheet("color:#fca5a5;padding:4px;")
-            self.pipeline_cloud_result.setText(f"继续填表失败：{message}<br>修正配置后可以再次点击继续填表�?)
+            self.pipeline_cloud_result.setText(f"继续填表失败：{message}<br>修正配置后可以再次点击继续填表。")
             if hasattr(self, "dynamic_caption_page"):
                 self.dynamic_caption_page._append_run_log(f"[云端同步失败] 填表失败：{message}")
 
@@ -5332,12 +5332,12 @@ class MainWindow(QMainWindow):
         if self.cloud_thread:
             try:
                 if self.cloud_thread.isRunning():
-                    QMessageBox.information(self, "正在上传", "请等待当前上传结束，或点击停止上传�?)
+                    QMessageBox.information(self, "正在上传", "请等待当前上传结束，或点击停止上传。")
                     return
             except RuntimeError: self.cloud_thread = None
         config = self._selected_sync_config(); config["enabled"] = True
         if not Path(config.get("json_path", "")).is_file() or not extract_google_id(config.get("parent_folder", "")):
-            QMessageBox.warning(self, "Google 配置不完�?, "请先配置授权 JSON �?Drive 父文件夹�?)
+            QMessageBox.warning(self, "Google 配置不完整", "请先配置授权 JSON 和 Drive 父文件夹。")
             self._open_google_settings(); return
         if records is None:
             results = list(self.subtitle_results.values())
@@ -5369,7 +5369,7 @@ class MainWindow(QMainWindow):
         self.cloud_thread.finished.connect(self._cloud_thread_ended); self.cloud_thread.finished.connect(self.cloud_thread.deleteLater)
         self.pipeline_stop_upload.setEnabled(True); self.pipeline_retry_upload.setEnabled(False)
         self.pipeline_cloud_result.setStyleSheet("color:#7dd3fc;padding:4px;")
-        self.pipeline_cloud_result.setText(f"正在上传 {len(files)} 个重命名成品�?)
+        self.pipeline_cloud_result.setText(f"正在上传 {len(files)} 个重命名成品…")
         self.cloud_thread.start()
 
     def _stop_cloud_upload(self):
@@ -5385,7 +5385,7 @@ class MainWindow(QMainWindow):
         else:
             self.pipeline_retry_upload.setEnabled(bool(self.pending_upload_files))
             self.pipeline_cloud_result.setStyleSheet("color:#fca5a5;padding:4px;")
-            self.pipeline_cloud_result.setText(f"上传失败/已停止：{message}<br>可以修复授权后继续上传�?)
+            self.pipeline_cloud_result.setText(f"上传失败/已停止：{message}<br>可以修复授权后继续上传。")
 
     def _cloud_thread_ended(self):
         self.cloud_worker = None; self.cloud_thread = None
@@ -5394,7 +5394,7 @@ class MainWindow(QMainWindow):
         self.pipeline_start_btn.setEnabled(True); self.pipeline_stop.setEnabled(False)
         self.pipeline_log.appendPlainText(message)
         (QMessageBox.information if ok else QMessageBox.critical)(
-            self, "流水线完�? if ok else "流水线失�?, message)
+            self, "流水线完成" if ok else "流水线失败", message)
 
     def _choose_output(self):
         path = QFileDialog.getExistingDirectory(self, "选择字幕输出目录", self.output_edit.text())
@@ -5444,7 +5444,7 @@ class MainWindow(QMainWindow):
         self.model_edit.blockSignals(False)
 
     def _current_model_for_provider(self, provider: str) -> str:
-        """从模型下�?配置解析实际模型名�?""
+        """从模型下拉/配置解析实际模型名。"""
         if provider == AUTO_PROVIDER:
             return ""
         if provider == LOCAL_PROVIDER:
@@ -5463,12 +5463,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_priority_label(self):
         if hasattr(self, "priority_label"):
-            self.priority_label.setText("  �? ".join(self.store.data["provider_priority"]))
+            self.priority_label.setText("  ›  ".join(self.store.data["provider_priority"]))
 
     def _open_priority_dialog(self):
-        dialog = QDialog(self); dialog.setWindowTitle("调整字幕服务优先�?); dialog.resize(470, 390)
+        dialog = QDialog(self); dialog.setWindowTitle("调整字幕服务优先级"); dialog.resize(470, 390)
         box = QVBoxLayout(dialog)
-        note = QLabel("自动模式会从上到下查找可用服务；拖动项目，或用右侧按钮调整�?)
+        note = QLabel("自动模式会从上到下查找可用服务；拖动项目，或用右侧按钮调整。")
         note.setWordWrap(True); box.addWidget(note)
         row = QHBoxLayout(); priority_list = QListWidget()
         priority_list.addItems(self.store.data["provider_priority"])
@@ -5496,15 +5496,15 @@ class MainWindow(QMainWindow):
             if provider == LOCAL_PROVIDER:
                 return provider
             keys = self.store.data["providers"].get(provider, [])
-            if any(x.get("enabled", True) and x.get("status", "未检�?) in ("未检�?, "有效") for x in keys):
+            if any(x.get("enabled", True) and x.get("status", "未检测") in ("未检测", "有效") for x in keys):
                 return provider
         return LOCAL_PROVIDER
 
     def _caption_asr_language(self) -> str:
-        """Reels 识别语言 �?Whisper/云识�?language 码；自动�?auto�?
+        """Reels 识别语言 → Whisper/云识别 language 码；自动则 auto。
 
-        优先「字幕识别」页的识别语言（可固定马达加斯加语等）�?
-        其次书写语言；再次字幕提取页语言框�?
+        优先「字幕识别」页的识别语言（可固定马达加斯加语等）；
+        其次书写语言；再次字幕提取页语言框。
         """
         try:
             page = getattr(self, "dynamic_caption_page", None)
@@ -5532,13 +5532,13 @@ class MainWindow(QMainWindow):
         return "auto"
 
     def _caption_transcribe(self, media_path, selected_provider, cancel_flag=None, prefer_fast=False):
-        """在动态文案工作线程中复用同一套识别、翻译和密钥轮询逻辑�?
+        """在动态文案工作线程中复用同一套识别、翻译和密钥轮询逻辑。
 
-        cancel_flag: 可�?callable() -> bool，为 True 时尽快中止（图文成片点停止）�?
-        prefer_fast: 图文成片场景优先用更轻的本地模型，避�?medium 卡死感�?
+        cancel_flag: 可选 callable() -> bool，为 True 时尽快中止（图文成片点停止）。
+        prefer_fast: 图文成片场景优先用更轻的本地模型，避免 medium 卡死感。
         """
         priority = list(self.store.data.get("provider_priority") or PROVIDERS + [LOCAL_PROVIDER])
-        # 界面旧文�?/ 别名 �?正式 provider �?
+        # 界面旧文案 / 别名 → 正式 provider 名
         alias = {
             "Whisper (本地/较慢)": LOCAL_PROVIDER,
             "Whisper": LOCAL_PROVIDER,
@@ -5552,7 +5552,7 @@ class MainWindow(QMainWindow):
             provider = alias.get(str(provider or "").strip(), provider)
             if provider in TRANSCRIPTION_PROVIDERS and provider != AUTO_PROVIDER and provider not in ordered:
                 ordered.append(provider)
-        # 图文成片 + 长音频：云端偶发「整�?1 条字幕」且很慢；把本地 Whisper 提前，避免干�?Gemini 数分�?
+        # 图文成片 + 长音频：云端偶发「整段 1 条字幕」且很慢；把本地 Whisper 提前，避免干等 Gemini 数分钟
         if prefer_fast:
             media_sec = 0.0
             try:
@@ -5567,15 +5567,15 @@ class MainWindow(QMainWindow):
         errors = []
         asr_language = self._caption_asr_language()
         write_app_log(
-            f"图文/字幕识别排队：{Path(media_path).name}｜首�?{selected_provider}｜候�?{','.join(ordered)}"
+            f"图文/字幕识别排队：{Path(media_path).name}｜首选={selected_provider}｜候选={','.join(ordered)}"
             f"{'｜prefer_fast' if prefer_fast else ''}",
             "INFO", "字幕识别",
         )
         for provider in ordered:
             if cancel_flag and cancel_flag():
-                raise RuntimeError("任务已取�?)
+                raise RuntimeError("任务已取消")
             if provider != LOCAL_PROVIDER and not self.store.has_candidates(provider):
-                message = f"{provider} 没有可用密钥，自动尝试下一种识别服�?
+                message = f"{provider} 没有可用密钥，自动尝试下一种识别服务"
                 errors.append(message); write_app_log(message, "WARNING", "字幕识别")
                 continue
             model = self.store.data["models"].get(provider, DEFAULT_MODELS[provider])
@@ -5585,14 +5585,14 @@ class MainWindow(QMainWindow):
                 if cur in ("", "medium", "large-v3", "large-v2", "large"):
                     model = "small"
             try:
-                # resume_existing=False：避免误复用 subtitle_tasks 断点里的坏结�?
+                # resume_existing=False：避免误复用 subtitle_tasks 断点里的坏结果
                 worker = TranscribeWorker(
                     self.store, provider, model, [media_path], "", asr_language, False,
                     self._find_ffmpeg(), False, True, False,
                 )
-                # 同步调用�?Signal 可能无接收端：双写到软件日志
+                # 同步调用时 Signal 可能无接收端：双写到软件日志
                 worker.log.connect(lambda m: write_app_log(m, "INFO", "字幕识别"))
-                # 轮询取消标志，写�?TranscribeWorker.cancelled（Whisper 段落间会检查）
+                # 轮询取消标志，写入 TranscribeWorker.cancelled（Whisper 段落间会检查）
                 stop_poll = threading.Event()
                 poller = None
                 if cancel_flag:
@@ -5607,12 +5607,12 @@ class MainWindow(QMainWindow):
                     poller = threading.Thread(target=_poll_cancel, name="asr-cancel-poll", daemon=True)
                     poller.start()
                 write_app_log(
-                    f"字幕识别：{Path(media_path).name}｜服�?{provider}｜模�?{model}｜语言={asr_language or 'auto'}",
+                    f"字幕识别：{Path(media_path).name}｜服务={provider}｜模型={model}｜语言={asr_language or 'auto'}",
                     "INFO", "字幕识别",
                 )
                 try:
                     if cancel_flag and cancel_flag():
-                        raise RuntimeError("任务已取�?)
+                        raise RuntimeError("任务已取消")
                     result = worker._process_one(media_path)
                 finally:
                     stop_poll.set()
@@ -5625,7 +5625,7 @@ class MainWindow(QMainWindow):
                         timed_words.append({"start": float(word.get("start", 0)),
                                             "end": float(word.get("end", word.get("start", 0) + .25)), "text": text})
                 precise_srt = segments_to_srt(timed_words) if timed_words else result["srt"]
-                # 质量护栏：词级结果若明显少于句级，优先句级（防坏 words 列表�?
+                # 质量护栏：词级结果若明显少于句级，优先句级（防坏 words 列表）
                 phrase_count = max(0, str(result.get("srt") or "").count("-->"))
                 word_count = max(0, precise_srt.count("-->"))
                 if phrase_count >= 3 and word_count > 0 and word_count < max(2, phrase_count // 3):
@@ -5634,7 +5634,7 @@ class MainWindow(QMainWindow):
                         "WARNING", "字幕识别",
                     )
                     precise_srt = result["srt"]
-                # 仍是句级（Gemini 常见）：按字长占比估词级，避免跟读「一词一分」假匀�?
+                # 仍是句级（Gemini 常见）：按字长占比估词级，避免跟读「一词一分」假匀速
                 try:
                     from modules.dynamic_caption_page import ensure_word_level_srt
                     precise_srt, estimated = ensure_word_level_srt(
@@ -5648,7 +5648,7 @@ class MainWindow(QMainWindow):
                         )
                 except Exception as expand_exc:
                     write_app_log(f"词级估时跳过：{expand_exc}", "WARNING", "字幕识别")
-                # 长音频护栏：整段只出 1�? 条（Gemini 常见）对跟读/语义几乎无用，强制换下一方案
+                # 长音频护栏：整段只出 1～2 条（Gemini 常见）对跟读/语义几乎无用，强制换下一方案
                 media_dur = 0.0
                 try:
                     from modules.dynamic_caption_page import media_duration
@@ -5679,12 +5679,12 @@ class MainWindow(QMainWindow):
                     min_chars = max(100, int(media_dur * 1.8))
                     if cue_n < min_cues or plain_len < min_chars:
                         raise RuntimeError(
-                            f"结果过稀（{cue_n} �?{plain_len} �?{media_dur:.0f}s�?
+                            f"结果过稀（{cue_n} 条/{plain_len} 字/{media_dur:.0f}s，"
                             f"期望≥{min_cues} 条）：长配音需更细时间轴，改试下一识别服务"
                         )
                 if errors:
                     write_app_log(f"已自动切换到 {provider} 并继续：{Path(media_path).name}", "INFO", "字幕识别")
-                # �?Reels 界面日志显示「真正用了谁�?
+                # 供 Reels 界面日志显示「真正用了谁」
                 self._last_caption_asr = {
                     "provider": provider,
                     "model": model,
@@ -5694,12 +5694,12 @@ class MainWindow(QMainWindow):
                 return result["original"], result["chinese"], precise_srt
             except Exception as exc:
                 if (cancel_flag and cancel_flag()) or "取消" in str(exc):
-                    raise RuntimeError("任务已取�?) from exc
+                    raise RuntimeError("任务已取消") from exc
                 message = f"{provider} 调用失败（可能是配额、密钥或网络问题）：{exc}；自动切换下一方案"
                 errors.append(message); write_app_log(message, "WARNING", "字幕识别")
         if cancel_flag and cancel_flag():
-            raise RuntimeError("任务已取�?)
-        final = "所有字幕识别方案均不可用：" + "�?.join(errors[-5:])
+            raise RuntimeError("任务已取消")
+        final = "所有字幕识别方案均不可用：" + "｜".join(errors[-5:])
         write_app_log(final, "ERROR", "字幕识别")
         raise RuntimeError(final)
 
@@ -5713,7 +5713,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _elevenlabs_alignment_to_srt(alignment, srt_path):
-        """VideoKit 同款：把 with-timestamps �?character 对齐写成简�?SRT�?""
+        """VideoKit 同款：把 with-timestamps 的 character 对齐写成简易 SRT。"""
         chars = alignment.get("characters") or []
         starts = alignment.get("character_start_times_seconds") or []
         ends = alignment.get("character_end_times_seconds") or []
@@ -5734,9 +5734,9 @@ class MainWindow(QMainWindow):
                 ms = 0
             return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-        # 按停�?标点拆成字幕�?
-        delimiters = set(" \t\n，。！�?.!?;�?：\"'“�?)
-        sentence_end = set("。！�?!?")
+        # 按停顿/标点拆成字幕块
+        delimiters = set(" \t\n，。！？,.!?;；:：\"'“”")
+        sentence_end = set("。！？.!?")
         blocks = []
         buf, b_start, b_end = "", None, 0.0
         for i in range(n):
@@ -5766,22 +5766,22 @@ class MainWindow(QMainWindow):
         Path(srt_path).write_text("\n".join(lines), encoding="utf-8")
 
     def _text_to_speech(self, text, service, voice, destination):
-        """生成配音；ElevenLabs 失败时自动轮换下一枚可用密钥�?""
+        """生成配音；ElevenLabs 失败时自动轮换下一枚可用密钥。"""
         target = Path(destination); target.parent.mkdir(parents=True, exist_ok=True)
-        if service == "微软文字转语�?:
+        if service == "微软文字转语音":
             try:
                 import edge_tts
             except ImportError as exc:
-                raise RuntimeError("缺少微软语音组件 edge-tts，请到“设置与组件”点击一键安装�?) from exc
+                raise RuntimeError("缺少微软语音组件 edge-tts，请到“设置与组件”点击一键安装。") from exc
             clean_text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", str(text)).strip()
             if not clean_text:
-                raise RuntimeError("文案为空，无法生成语音�?)
+                raise RuntimeError("文案为空，无法生成语音。")
 
-            # 下拉项可能是「ShortName｜说明�?
-            selected_voice = (str(voice or "").split("�?, 1)[0].strip() or "zh-CN-XiaoxiaoNeural")
+            # 下拉项可能是「ShortName｜说明」
+            selected_voice = (str(voice or "").split("｜", 1)[0].strip() or "zh-CN-XiaoxiaoNeural")
             locale_m = re.match(r"^([a-z]{2}-[A-Z]{2})", selected_voice)
             locale = locale_m.group(1) if locale_m else selected_voice[:5]
-            # 多语言备用音色（同语种失败时自动换�?
+            # 多语言备用音色（同语种失败时自动换）
             voice_fallbacks = {
                 "pt-PT": ["pt-PT-RaquelNeural", "pt-PT-DuarteNeural"],
                 "pt-BR": ["pt-BR-FranciscaNeural", "pt-BR-AntonioNeural"],
@@ -5811,13 +5811,13 @@ class MainWindow(QMainWindow):
             }
             voices = list(dict.fromkeys([selected_voice] + voice_fallbacks.get(locale, [])))
 
-            # Edge 的免费接口在长段落或网络短暂波动时偶尔只返回元数据、不返回音频�?
-            # 按句拆成适中的请求，并对当前音色及同语种备用音色自动重试�?
-            # 注意：不要用 strip("。！？�?) 之类会吃掉首尾标�?句子的写法�?
+            # Edge 的免费接口在长段落或网络短暂波动时偶尔只返回元数据、不返回音频。
+            # 按句拆成适中的请求，并对当前音色及同语种备用音色自动重试。
+            # 注意：不要用 strip("。！？…") 之类会吃掉首尾标点/句子的写法。
             pieces = []
             pending = ""
-            # 保留首句：用换行/句末标点切分，但不过滤无标点的开头段�?
-            raw_parts = re.split(r"(?<=[。！�?!?�?])\s+|\n+", clean_text)
+            # 保留首句：用换行/句末标点切分，但不过滤无标点的开头段落
+            raw_parts = re.split(r"(?<=[。！？.!?；;])\s+|\n+", clean_text)
             for sentence in raw_parts:
                 sentence = sentence.strip()
                 if not sentence:
@@ -5831,7 +5831,7 @@ class MainWindow(QMainWindow):
                 pieces.append(pending)
             if not pieces:
                 pieces = [clean_text]
-            # 保险：若首段过短（纯标点/序号），合并到下一段，避免「第一句没声�?
+            # 保险：若首段过短（纯标点/序号），合并到下一段，避免「第一句没声」
             if len(pieces) >= 2 and len(re.sub(r"[\s\W_]+", "", pieces[0], flags=re.UNICODE)) < 2:
                 pieces[1] = f"{pieces[0]} {pieces[1]}".strip()
                 pieces = pieces[1:]
@@ -5851,7 +5851,7 @@ class MainWindow(QMainWindow):
                             boundaries.append({"start": start, "end": start + max(.08, duration),
                                                "text": str(chunk.get("text", "")).strip()})
                 if wrote < 256:
-                    raise RuntimeError("流式接口未写入有效音频数�?)
+                    raise RuntimeError("流式接口未写入有效音频数据")
                 return boundaries
 
             def _probe_audio_seconds(path: Path) -> float:
@@ -5887,14 +5887,14 @@ class MainWindow(QMainWindow):
                                     part_path.unlink()
                                 boundaries = asyncio.run(generate_part(piece, part_path, selected))
                                 if not part_path.exists() or part_path.stat().st_size < 256:
-                                    raise RuntimeError(f"�?{index + 1} 段没有收到音频（可能是首句被跳过�?)
+                                    raise RuntimeError(f"第 {index + 1} 段没有收到音频（可能是首句被跳过）")
                                 part_paths.append(part_path)
                                 part_dur = _probe_audio_seconds(part_path)
                                 for entry in boundaries:
                                     all_boundaries.append({**entry,
                                                            "start": entry["start"] + time_offset,
                                                            "end": entry["end"] + time_offset})
-                                # �?WordBoundary 时也必须推进时间轴，避免后段字幕盖住首句
+                                # 无 WordBoundary 时也必须推进时间轴，避免后段字幕盖住首句
                                 if boundaries:
                                     time_offset += max(item["end"] for item in boundaries) + .06
                                 elif part_dur > 0.05:
@@ -5908,7 +5908,7 @@ class MainWindow(QMainWindow):
                                 target.unlink()
                             ffmpeg = self._find_ffmpeg()
                             if len(part_paths) == 1:
-                                # 重编码一次，消除部分 edge-tts MP3 片头丢帧导致「第一句听不见�?
+                                # 重编码一次，消除部分 edge-tts MP3 片头丢帧导致「第一句听不见」
                                 result = subprocess.run(
                                     [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                                      "-i", str(part_paths[0]),
@@ -5939,13 +5939,13 @@ class MainWindow(QMainWindow):
                                 if result.returncode:
                                     raise RuntimeError(result.stderr.strip() or "分段音频合并失败")
                             if not target.exists() or target.stat().st_size < 256:
-                                raise RuntimeError("合并后音频为�?)
+                                raise RuntimeError("合并后音频为空")
                             # 时长异常偏短时视为首句丢失，触发重试
                             total_dur = _probe_audio_seconds(target)
                             min_expect = max(0.35, min(8.0, len(clean_text) * 0.035))
                             if total_dur > 0 and total_dur < min_expect * 0.45:
                                 raise RuntimeError(
-                                    f"生成音频过短（{total_dur:.2f}s），疑似首句未写入，将重�?)
+                                    f"生成音频过短（{total_dur:.2f}s），疑似首句未写入，将重试")
                             if all_boundaries:
                                 target.with_suffix(".srt").write_text(
                                     segments_to_srt(all_boundaries), encoding="utf-8-sig")
@@ -5958,15 +5958,15 @@ class MainWindow(QMainWindow):
                                 except OSError:
                                     pass
             raise RuntimeError(
-                "微软文字转语音连续重试后仍未收到音频�?
+                "微软文字转语音连续重试后仍未收到音频。"
                 f"\n最后错误：{last_error}"
-                "\n请检查网络，或切换同语种音色；追求自然度可改�?ElevenLabs�?)
+                "\n请检查网络，或切换同语种音色；追求自然度可改用 ElevenLabs。")
 
         if service == "Gemini 自然语音":
             candidates = self.store.candidates("Gemini")
             if not candidates:
-                raise RuntimeError("没有可用�?Gemini 密钥，请先到密钥管理添加并检测�?)
-            voice_name = (voice.split("�?, 1)[0].strip() if voice else "Kore") or "Kore"
+                raise RuntimeError("没有可用的 Gemini 密钥，请先到密钥管理添加并检测。")
+            voice_name = (voice.split("｜", 1)[0].strip() if voice else "Kore") or "Kore"
             last_error = ""
             tts_models = (
                 "gemini-3.1-flash-tts-preview",
@@ -6007,7 +6007,7 @@ class MainWindow(QMainWindow):
                     inline = next((part.get("inlineData") or part.get("inline_data")
                                    for part in parts if part.get("inlineData") or part.get("inline_data")), None)
                     if not inline or not inline.get("data"):
-                        last_error = "Gemini 没有返回音频数据，请重试或更换音色�?
+                        last_error = "Gemini 没有返回音频数据，请重试或更换音色。"
                         self.store.mark_use("Gemini", item["id"], "异常", last_error)
                         continue
                     audio = base64.b64decode(inline["data"])
@@ -6039,26 +6039,26 @@ class MainWindow(QMainWindow):
                     self.store.mark_use("Gemini", item["id"], "异常", last_error)
             raise RuntimeError(f"Gemini 可用密钥均生成失败。最后错误：{last_error}")
 
-        voice_id = voice.strip().split("�?, 1)[0].strip()
+        voice_id = voice.strip().split("｜", 1)[0].strip()
         if not voice_id or voice_id.endswith("Neural"):
             raise RuntimeError(
-                "使用 ElevenLabs 时，请在音色框输�?ElevenLabs Voice ID"
-                "（在 elevenlabs.io 音色库复制，不是微软 Neural 名称）�?
+                "使用 ElevenLabs 时，请在音色框输入 ElevenLabs Voice ID"
+                "（在 elevenlabs.io 音色库复制，不是微软 Neural 名称）。"
             )
         candidates = self.store.candidates("ElevenLabs")
         if not candidates:
             raise RuntimeError(
-                "没有可用�?ElevenLabs 凭证。\n"
-                "请到「设置与组件 �?密钥」任选其一：\n"
-                "�?添加 sk_ API Key；或\n"
-                "�?添加「网页会话（Cookie）」——与浏览器插件相同，�?Bearer 调官�?TTS 扣点数。\n"
-                "也可在「文字转语音」独立板块批量生成�?
+                "没有可用的 ElevenLabs 凭证。\n"
+                "请到「设置与组件 → 密钥」任选其一：\n"
+                "• 添加 sk_ API Key；或\n"
+                "• 添加「网页会话（Cookie）」——与浏览器插件相同，用 Bearer 调官方 TTS 扣点数。\n"
+                "也可在「文字转语音」独立板块批量生成。"
             )
         el_model = (
             os.environ.get("VIDEO_TOOLKIT_EL_MODEL")
             or "eleven_flash_v2_5"
         ).strip() or "eleven_flash_v2_5"
-        # Reels/字幕需要时间轴时用 timestamps；独立批量板块默�?stream（与插件一致）
+        # Reels/字幕需要时间轴时用 timestamps；独立批量板块默认 stream（与插件一致）
         want_ts = os.environ.get("VIDEO_TOOLKIT_EL_TIMESTAMPS", "").strip() in ("1", "true", "yes")
         last_error = ""
         for item in candidates:
@@ -6076,7 +6076,7 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
                 if not audio_bytes or len(audio_bytes) < 256:
-                    last_error = "接口未返回有效音�?
+                    last_error = "接口未返回有效音频"
                     self.store.mark_use("ElevenLabs", item["id"], "异常", last_error)
                     continue
                 target.write_bytes(audio_bytes)
@@ -6100,10 +6100,10 @@ class MainWindow(QMainWindow):
         raise RuntimeError(
             f"ElevenLabs 可用凭证均生成失败。最后错误：{last_error}\n"
             "排查：\n"
-            "�?Voice ID 是否�?elevenlabs 音色�?ID（非微软 Neural 名称）\n"
-            "�?sk_ 密钥或网页会�?Authorization/Cookie 是否过期（JWT �?1 小时）\n"
-            "�?免费档是否被 unusual_activity 关掉 API（网页仍可能显示点数）\n"
-            "�?可添加多个网页会�?密钥轮询；或改用「微软文字转语音�?
+            "① Voice ID 是否为 elevenlabs 音色库 ID（非微软 Neural 名称）\n"
+            "② sk_ 密钥或网页会话 Authorization/Cookie 是否过期（JWT 约 1 小时）\n"
+            "③ 免费档是否被 unusual_activity 关掉 API（网页仍可能显示点数）\n"
+            "④ 可添加多个网页会话/密钥轮询；或改用「微软文字转语音」"
         )
 
     def _find_ffmpeg(self):
@@ -6115,24 +6115,24 @@ class MainWindow(QMainWindow):
         found = shutil.which("ffmpeg")
         if found and validate_media_tool(found,"ffmpeg"):
             return found
-        raise RuntimeError(f"未找�?{executable}")
+        raise RuntimeError(f"未找到 {executable}")
 
     def _start_transcription(self):
         local_files = [self.file_list.item(i).text() for i in range(self.file_list.count())]
         urls = [line.strip() for line in self.url_input.toPlainText().splitlines() if line.strip()]
         invalid_urls = [url for url in urls if not is_supported_video_url(url)]
         if invalid_urls:
-            QMessageBox.warning(self, "链接格式不支�?,
+            QMessageBox.warning(self, "链接格式不支持",
                                 "以下内容不是受支持的视频链接：\n" + "\n".join(invalid_urls[:5]))
             return
         files = local_files + urls
         if not files:
-            QMessageBox.information(self, "请选择来源", "请添加本地视�?音频，或粘贴网络视频链接�?)
+            QMessageBox.information(self, "请选择来源", "请添加本地视频/音频，或粘贴网络视频链接。")
             return
         selected_provider = self.provider_combo.currentText()
         provider = self._resolve_provider() if selected_provider == AUTO_PROVIDER else selected_provider
         if provider != LOCAL_PROVIDER and not self.store.has_candidates(provider):
-            QMessageBox.information(self, "缺少密钥", f"请先在“API 密钥管理”中添加 {provider} 密钥�?)
+            QMessageBox.information(self, "缺少密钥", f"请先在“API 密钥管理”中添加 {provider} 密钥。")
             self._show_page(6)
             return
         try:
@@ -6149,9 +6149,9 @@ class MainWindow(QMainWindow):
             self.store.save()
         self.log_box.clear(); self.transcribe_progress.setValue(0)
         if selected_provider == AUTO_PROVIDER:
-            self._append_log(f"自动选择：{provider}（模型：{model}�?)
+            self._append_log(f"自动选择：{provider}（模型：{model}）")
         else:
-            self._append_log(f"使用 {provider}（模型：{model}�?)
+            self._append_log(f"使用 {provider}（模型：{model}）")
         self.subtitle_results.clear(); self.result_combo.clear(); self.result_combo.addItem(ALL_RESULTS_LABEL)
         self.original_result.clear(); self.chinese_result.clear()
         self.thread = QThread(self)
@@ -6171,7 +6171,7 @@ class MainWindow(QMainWindow):
         self.thread.start()
 
     def _subtitle_language_code(self) -> str:
-        """UI 语言下拉 �?whisper/书写用码；空�?auto�?""
+        """UI 语言下拉 → whisper/书写用码；空则 auto。"""
         code = writing_language_from_ui(self.language_edit.currentText())
         return code or "auto"
 
@@ -6181,7 +6181,7 @@ class MainWindow(QMainWindow):
 
     def _cancel_transcription(self):
         if self.worker:
-            self.worker.cancel(); self._append_log("正在取消（当前网络请求结束后生效）�?)
+            self.worker.cancel(); self._append_log("正在取消（当前网络请求结束后生效）…")
 
     def _append_log(self, text):
         self.log_box.appendPlainText(f"[{datetime.now():%H:%M:%S}] {text}")
@@ -6211,8 +6211,8 @@ class MainWindow(QMainWindow):
         self.original_result.setPlainText(result.get("original", ""))
         self.chinese_result.setPlainText(result.get("chinese", ""))
 
-    def _flash_copied(self, message="�?已复�?):
-        """短暂显示绿色「已复制」提示，复制反馈更明显�?""
+    def _flash_copied(self, message="✓ 已复制"):
+        """短暂显示绿色「已复制」提示，复制反馈更明显。"""
         label = getattr(self, "copy_status", None)
         if label is None:
             return
@@ -6222,7 +6222,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _bilingual_to_csv(original: str, chinese: str) -> str:
-        """原文/中文按行配对�?TSV 两列，粘贴到 Google 表格时自动左右并排�?""
+        """原文/中文按行配对为 TSV 两列，粘贴到 Google 表格时自动左右并排。"""
         def _lines(text: str):
             text = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
             if not text:
@@ -6235,7 +6235,7 @@ class MainWindow(QMainWindow):
 
         orig_lines = _lines(original)
         zh_lines = _lines(chinese)
-        # 若行数接近（�?�?），按行配对；否则各压成单格（两列一行）
+        # 若行数接近（差 ≤2），按行配对；否则各压成单格（两列一行）
         if orig_lines and zh_lines and abs(len(orig_lines) - len(zh_lines)) <= 2:
             n = max(len(orig_lines), len(zh_lines))
             rows = []
@@ -6251,7 +6251,7 @@ class MainWindow(QMainWindow):
         if not text.strip():
             return
         QApplication.clipboard().setText(text)
-        self._flash_copied("�?已复制原�?)
+        self._flash_copied("✓ 已复制原文")
 
     def _copy_bilingual(self):
         name = self.result_combo.currentText()
@@ -6263,7 +6263,7 @@ class MainWindow(QMainWindow):
             return
         text = self._bilingual_to_csv(result.get("original", ""), result.get("chinese", ""))
         QApplication.clipboard().setText(text)
-        self._flash_copied("�?已复制对照（CSV 两列�?)
+        self._flash_copied("✓ 已复制对照（CSV 两列）")
 
     def _copy_all_original(self):
         text = "\n\n".join(f"【{name}】\n{result['original']}"
@@ -6271,7 +6271,7 @@ class MainWindow(QMainWindow):
         if not text.strip():
             return
         QApplication.clipboard().setText(text)
-        self._flash_copied("�?已复制全部原�?)
+        self._flash_copied("✓ 已复制全部原文")
 
     def _copy_all_bilingual(self):
         parts = []
@@ -6282,11 +6282,11 @@ class MainWindow(QMainWindow):
         if not parts:
             return
         QApplication.clipboard().setText("\n".join(parts))
-        self._flash_copied("�?已复制全部对照（CSV 两列�?)
+        self._flash_copied("✓ 已复制全部对照（CSV 两列）")
 
     def _export_all_subtitles(self):
         if not self.subtitle_results:
-            QMessageBox.information(self, "没有结果", "请先完成字幕提取�?)
+            QMessageBox.information(self, "没有结果", "请先完成字幕提取。")
             return
         folder = QFileDialog.getExistingDirectory(self, "选择字幕导出目录")
         if not folder:
@@ -6297,11 +6297,11 @@ class MainWindow(QMainWindow):
             (output / f"{base}.srt").write_text(result.get("srt", ""), encoding="utf-8-sig")
             (output / f"{base}_原文.txt").write_text(result.get("original", ""), encoding="utf-8-sig")
             bilingual = f"【原文】\n{result.get('original', '')}\n\n【简体中文】\n{result.get('chinese', '')}"
-            (output / f"{base}_中外文对�?txt").write_text(bilingual, encoding="utf-8-sig")
-        QMessageBox.information(self, "导出完成", f"已导�?{len(self.subtitle_results)} 组字幕到：\n{output}")
+            (output / f"{base}_中外文对照.txt").write_text(bilingual, encoding="utf-8-sig")
+        QMessageBox.information(self, "导出完成", f"已导出 {len(self.subtitle_results)} 组字幕到：\n{output}")
 
     def _add_keys_for_provider(self, provider):
-        """兼容旧入口：按指定服务添加（使用统一输入框）�?""
+        """兼容旧入口：按指定服务添加（使用统一输入框）。"""
         if hasattr(self, "key_assign_mode"):
             index = self.key_assign_mode.findData(provider)
             if index >= 0:
@@ -6317,7 +6317,7 @@ class MainWindow(QMainWindow):
             return
         keys = [line.strip() for line in edit.toPlainText().splitlines() if line.strip()]
         if not keys:
-            QMessageBox.information(self, "没有密钥", "请粘贴至少一枚密钥，每行一个�?)
+            QMessageBox.information(self, "没有密钥", "请粘贴至少一枚密钥，每行一个。")
             return
         mode = "auto"
         if force_provider in PROVIDERS:
@@ -6336,10 +6336,10 @@ class MainWindow(QMainWindow):
                 provider = detect_api_provider(key)
                 how = "格式"
                 if not provider:
-                    # 规则认不出时：短超时联网探测，减少「找不到对应服务�?
+                    # 规则认不出时：短超时联网探测，减少「找不到对应服务」
                     provider, how = detect_api_provider_with_probe(key, timeout=8.0)
                     if provider:
-                        probed_notes.append(f"{masked_key(key)}→{provider}（{how}�?)
+                        probed_notes.append(f"{masked_key(key)}→{provider}（{how}）")
                 if not provider:
                     unknown.append(masked_key(key))
                     continue
@@ -6353,47 +6353,47 @@ class MainWindow(QMainWindow):
 
         edit.clear()
         self._refresh_keys()
-        parts = [f"{p} {n} �? for p, n in counts.items() if n]
-        message = "已添加：" + ("�?.join(parts) if parts else "0 �?) + "�?
+        parts = [f"{p} {n} 枚" for p, n in counts.items() if n]
+        message = "已添加：" + ("、".join(parts) if parts else "0 枚") + "。"
         if probed_notes:
-            message += "\n联网辅助识别�? + "�?.join(probed_notes[:6])
+            message += "\n联网辅助识别：" + "；".join(probed_notes[:6])
             if len(probed_notes) > 6:
-                message += "�?
+                message += "…"
         if unknown:
             message += (
-                f"\n仍未能识�?{len(unknown)} 枚（请在上方下拉框「强制归�?xxx」后重试）："
-                + "�?.join(unknown[:5])
-                + ("�? if len(unknown) > 5 else "")
+                f"\n仍未能识别 {len(unknown)} 枚（请在上方下拉框「强制归入 xxx」后重试）："
+                + "、".join(unknown[:5])
+                + ("…" if len(unknown) > 5 else "")
             )
         if skipped:
-            message += f"\n跳过 {len(skipped)} 枚重复或无效内容�?
+            message += f"\n跳过 {len(skipped)} 枚重复或无效内容。"
         QMessageBox.information(self, "添加完成", message)
 
     def _add_elevenlabs_web_session(self):
-        """添加 ElevenLabs 网页会话（Cookie），支持多账户，扣各自免费点数�?""
+        """添加 ElevenLabs 网页会话（Cookie），支持多账户，扣各自免费点数。"""
         dialog = QDialog(self)
         dialog.setWindowTitle("添加 ElevenLabs 网页会话")
         dialog.resize(560, 520)
         box = QVBoxLayout(dialog)
         tip = QLabel(
-            "<b>用�?/b>：用自己账号登录态在软件内转语音，扣该账号点数；可多账户轮询�?br/><br/>"
-            "<b style='color:#fbbf24'>重要：不要复�?Application→Cookies �?JSON 列表</b>"
-            "（那是统�?Cookie，会�?401）。请按下面做�?br/>"
-            "1. 浏览器打开并登�?"
+            "<b>用途</b>：用自己账号登录态在软件内转语音，扣该账号点数；可多账户轮询。<br/><br/>"
+            "<b style='color:#fbbf24'>重要：不要复制 Application→Cookies 的 JSON 列表</b>"
+            "（那是统计 Cookie，会报 401）。请按下面做：<br/>"
+            "1. 浏览器打开并登录 "
             "<a href='https://elevenlabs.io/app/home'>elevenlabs.io/app/home</a><br/>"
-            "2. F12 �?<b>Network（网络）</b> �?刷新页面<br/>"
+            "2. F12 → <b>Network（网络）</b> → 刷新页面<br/>"
             "3. 过滤 <code>api.elevenlabs.io</code>，点开任意成功请求<br/>"
-            "4. Request Headers 里复制（任选其一，推荐从上到下）�?br/>"
-            "　�?<b>xi-api-key</b>（最稳，贴到下方「xi-api-key」框�?br/>"
-            "　�?<b>Authorization: Bearer �?/b>（贴�?Authorization 框）<br/>"
-            "　�?整行 <b>Cookie:</b>（需�?<code>fern_token</code>，贴�?Cookie 框）<br/>"
-            "5. 也可把整�?Request Headers 文本直接贴进 Cookie 大框，软件会自动识别�?br/>"
-            "6. <b>更简�?/b>：用仓库 <code>tools/elevenlabs_capture.user.js</code> "
-            "（Tampermonkey �?F12 控制台粘贴），登录后右下角一键复制�?br/><br/>"
-            "<b style='color:#f87171'>为何网页有点数却 TTS 失败�?/b><br/>"
-            "官方会把「异常活动」账号的<strong>免费�?API</strong>关掉�?
-            "Balance 仍可能显�?10000，但本软件与 VideoKit 一样调官方 TTS 接口，会�?401�?
-            "请升级付费、换号，或改用微�?Gemini 语音�?
+            "4. Request Headers 里复制（任选其一，推荐从上到下）：<br/>"
+            "　• <b>xi-api-key</b>（最稳，贴到下方「xi-api-key」框）<br/>"
+            "　• <b>Authorization: Bearer …</b>（贴到 Authorization 框）<br/>"
+            "　• 整行 <b>Cookie:</b>（需含 <code>fern_token</code>，贴到 Cookie 框）<br/>"
+            "5. 也可把整段 Request Headers 文本直接贴进 Cookie 大框，软件会自动识别。<br/>"
+            "6. <b>更简单</b>：用仓库 <code>tools/elevenlabs_capture.user.js</code> "
+            "（Tampermonkey 或 F12 控制台粘贴），登录后右下角一键复制。<br/><br/>"
+            "<b style='color:#f87171'>为何网页有点数却 TTS 失败？</b><br/>"
+            "官方会把「异常活动」账号的<strong>免费档 API</strong>关掉；"
+            "Balance 仍可能显示 10000，但本软件与 VideoKit 一样调官方 TTS 接口，会被 401。"
+            "请升级付费、换号，或改用微软/Gemini 语音。"
         )
         tip.setWordWrap(True)
         tip.setOpenExternalLinks(True)
@@ -6402,20 +6402,20 @@ class MainWindow(QMainWindow):
 
         form = QFormLayout()
         label_edit = QLineEdit()
-        label_edit.setPlaceholderText("例如：账号A / 工作�?/ 1000点号1")
+        label_edit.setPlaceholderText("例如：账号A / 工作号 / 1000点号1")
         cookie_edit = QPlainTextEdit()
         cookie_edit.setPlaceholderText(
-            "推荐：直接粘�?Network 请求头整段，�?Cookie: 那一行\n"
+            "推荐：直接粘贴 Network 请求头整段，或 Cookie: 那一行\n"
             "格式示例：fern_token=eyJ...; 其它=...\n"
             "不要粘贴 Application 里导出的 {\"name\":\"_ga\",...} JSON 列表"
         )
         cookie_edit.setMinimumHeight(120)
         auth_edit = QLineEdit()
-        auth_edit.setPlaceholderText("推荐：Bearer eyJ...（Network 里的 Authorization�?)
+        auth_edit.setPlaceholderText("推荐：Bearer eyJ...（Network 里的 Authorization）")
         xi_edit = QLineEdit()
-        xi_edit.setPlaceholderText("最推荐：Network 里的 xi-api-key: sk_�?或网页密�?)
+        xi_edit.setPlaceholderText("最推荐：Network 里的 xi-api-key: sk_… 或网页密钥")
         form.addRow("账户备注", label_edit)
-        form.addRow("Cookie / 请求�?, cookie_edit)
+        form.addRow("Cookie / 请求头", cookie_edit)
         form.addRow("Authorization", auth_edit)
         form.addRow("xi-api-key", xi_edit)
         box.addLayout(form)
@@ -6438,7 +6438,7 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.warning(self, "无法保存", str(exc))
             return
-        # 先检�?
+        # 先检测
         ok, message, quota = el_web.verify_session(packed)
         if not ok:
             reply = QMessageBox.question(
@@ -6454,7 +6454,7 @@ class MainWindow(QMainWindow):
                 auth_kind="web",
                 label=label_edit.text().strip() or "网页会话",
             )
-            # 写入检测状�?
+            # 写入检测状态
             items = self.store.data["providers"]["ElevenLabs"]
             if items:
                 last = items[-1]
@@ -6463,9 +6463,9 @@ class MainWindow(QMainWindow):
                     if quota:
                         rem = quota.get("remaining", "?")
                         lim = quota.get("limit", "?")
-                        detail = f"剩余 {rem}/{lim} �?
+                        detail = f"剩余 {rem}/{lim} 点"
                         if quota.get("tts_ok") is False:
-                            detail += "｜TTS被风控禁�?免费API)"
+                            detail += "｜TTS被风控禁用(免费API)"
                         elif quota.get("tts_ok") is True:
                             detail += "｜TTS可用"
                     self.store.mark_use("ElevenLabs", last["id"], "有效", detail)
@@ -6478,17 +6478,17 @@ class MainWindow(QMainWindow):
         extra = ""
         if ok and quota and quota.get("tts_ok") is False:
             extra = (
-                "\n\n⚠️ 余额查询成功，但 TTS 探测失败：该账号免费�?API 可能被风�?
+                "\n\n⚠️ 余额查询成功，但 TTS 探测失败：该账号免费档 API 可能被风控"
                 "（网页仍显示 credits）。\n"
-                "请关 VPN、换网络重登后重新粘�?xi-api-key，或升级付费/换号�?
+                "请关 VPN、换网络重登后重新粘贴 xi-api-key，或升级付费/换号。"
             )
         elif ok and quota and quota.get("tts_ok") is True:
-            extra = "\n\n�?已通过极短文本 TTS 探测，可以试�?合成�?
+            extra = "\n\n✓ 已通过极短文本 TTS 探测，可以试听/合成。"
         QMessageBox.information(
-            self, "已添加网页会�?,
+            self, "已添加网页会话",
             (f"已保存：{label_edit.text().strip() or '网页会话'}\n{message}{extra}\n\n"
-             "到「文字转语音」板块�?ElevenLabs + Voice ID 即可批量转语音。\n"
-             "可继续添加更多账户实现轮询�?)
+             "到「文字转语音」板块选 ElevenLabs + Voice ID 即可批量转语音。\n"
+             "可继续添加更多账户实现轮询。")
         )
         write_app_log(f"添加 ElevenLabs 网页会话：{label_edit.text().strip() or '网页会话'}", "INFO", "密钥")
 
@@ -6501,7 +6501,7 @@ class MainWindow(QMainWindow):
                 notes = reclassify_misplaced_keys(self.store)
                 self._keys_reclassified = True
                 if notes:
-                    write_app_log("密钥归类修正�? + "�?.join(notes[:8]), "INFO", "密钥")
+                    write_app_log("密钥归类修正：" + "；".join(notes[:8]), "INFO", "密钥")
             except Exception as exc:
                 write_app_log(f"密钥归类修正跳过：{exc}", "WARN", "密钥")
         self.key_table.setRowCount(0)
@@ -6510,7 +6510,7 @@ class MainWindow(QMainWindow):
         for provider in PROVIDERS:
             for item in self.store.data["providers"][provider]:
                 row = self.key_table.rowCount(); self.key_table.insertRow(row)
-                reason = item.get("last_error", "") or "�?
+                reason = item.get("last_error", "") or "—"
                 compact_reason = " ".join(reason.split())
                 key_display = masked_key(item["key"])
                 if item.get("auth_kind") == "web" and item.get("label"):
@@ -6520,7 +6520,7 @@ class MainWindow(QMainWindow):
                 svc = provider
                 if item.get("auth_kind") == "web" or el_web.is_web_secret(item.get("key") or ""):
                     svc = f"{provider}·网页"
-                values = [svc, key_display, item.get("status", "未检�?),
+                values = [svc, key_display, item.get("status", "未检测"),
                           item.get("last_checked", ""), str(item.get("uses", 0)), compact_reason, item["id"]]
                 for col, value in enumerate(values):
                     cell = QTableWidgetItem(value)
@@ -6536,7 +6536,7 @@ class MainWindow(QMainWindow):
         jobs = []
         for index in self.key_table.selectionModel().selectedRows():
             provider = self.key_table.item(index.row(), 0).text()
-            # 显示名可能是「ElevenLabs·网页�?
+            # 显示名可能是「ElevenLabs·网页」
             provider = provider.split("·", 1)[0].strip()
             key_id = self.key_table.item(index.row(), 6).text()
             item = next((x for x in self.store.data["providers"].get(provider, [])
@@ -6548,7 +6548,7 @@ class MainWindow(QMainWindow):
     def _check_selected_keys(self):
         jobs = self._selected_key_jobs()
         if not jobs:
-            QMessageBox.information(self, "未选择", "请选择要检测的密钥行�?)
+            QMessageBox.information(self, "未选择", "请选择要检测的密钥行。")
             return
         self._run_key_check(jobs)
 
@@ -6557,19 +6557,19 @@ class MainWindow(QMainWindow):
         if jobs: self._run_key_check(jobs)
 
     def _run_key_check(self, jobs):
-        # 使用独立线程，避免与字幕/流水线共�?self.thread 互相踩踏
+        # 使用独立线程，避免与字幕/流水线共用 self.thread 互相踩踏
         if getattr(self, "_key_check_thread", None):
             try:
                 if self._key_check_thread.isRunning():
-                    QMessageBox.information(self, "任务进行�?, "请等待当前密钥检测结束�?)
+                    QMessageBox.information(self, "任务进行中", "请等待当前密钥检测结束。")
                     return
             except RuntimeError:
                 self._key_check_thread = None
-        # 兼容：字幕任务占�?self.thread 时也提示
+        # 兼容：字幕任务占用 self.thread 时也提示
         if self.thread:
             try:
                 if self.thread.isRunning():
-                    QMessageBox.information(self, "任务进行�?, "请等待当前任务结束�?)
+                    QMessageBox.information(self, "任务进行中", "请等待当前任务结束。")
                     return
             except RuntimeError:
                 self.thread = None
@@ -6578,7 +6578,7 @@ class MainWindow(QMainWindow):
         self._key_check_worker = KeyCheckWorker(jobs)
         self._key_check_worker.moveToThread(self._key_check_thread)
         self._key_check_thread.started.connect(self._key_check_worker.run)
-        # 显式排队到主线程，禁止在工作线程弹窗/�?UI
+        # 显式排队到主线程，禁止在工作线程弹窗/改 UI
         self._key_check_worker.progress.connect(
             self._key_check_result, Qt.ConnectionType.QueuedConnection)
         self._key_check_worker.finished.connect(
@@ -6600,13 +6600,13 @@ class MainWindow(QMainWindow):
             status = "异常"
         self.store.update_key(provider, key_id, status=status,
                               last_checked=datetime.now().strftime("%Y-%m-%d %H:%M"), last_error="" if ok else message)
-        # progress �?QueuedConnection 回到主线程，可安全刷新表�?
+        # progress 经 QueuedConnection 回到主线程，可安全刷新表格
         self._refresh_keys()
 
     def _key_check_done(self):
-        """必须在主线程执行：最终刷新并提示（禁止在工作线程弹窗）�?""
+        """必须在主线程执行：最终刷新并提示（禁止在工作线程弹窗）。"""
         self._refresh_keys()
-        QMessageBox.information(self, "检测完�?, "密钥检测已完成�?)
+        QMessageBox.information(self, "检测完成", "密钥检测已完成。")
 
     def _key_check_cleanup(self):
         worker = getattr(self, "_key_check_worker", None)
@@ -6621,7 +6621,7 @@ class MainWindow(QMainWindow):
     def _show_selected_key_error(self):
         rows = self.key_table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "未选择", "请先选择一行密钥�?)
+            QMessageBox.information(self, "未选择", "请先选择一行密钥。")
             return
         self._show_key_error(rows[0].row())
 
@@ -6634,13 +6634,13 @@ class MainWindow(QMainWindow):
         item = next((x for x in self.store.data["providers"][provider] if x["id"] == key_id), None)
         if not item:
             return
-        reason = item.get("last_error") or "没有错误记录。该密钥尚未检测，或最近一次检测通过�?
+        reason = item.get("last_error") or "没有错误记录。该密钥尚未检测，或最近一次检测通过。"
         detail = (f"服务：{provider}\n密钥：{masked_key(item['key'])}\n"
-                  f"状态：{item.get('status', '未检�?)}\n"
-                  f"检测时间：{item.get('last_checked') or '尚未检�?}\n\n"
+                  f"状态：{item.get('status', '未检测')}\n"
+                  f"检测时间：{item.get('last_checked') or '尚未检测'}\n\n"
                   f"检测详情：\n{reason}")
-        box = QMessageBox(self); box.setWindowTitle("密钥检测详�?); box.setIcon(QMessageBox.Icon.Information)
-        box.setText("密钥状态诊�?); box.setDetailedText(detail); box.setInformativeText(reason)
+        box = QMessageBox(self); box.setWindowTitle("密钥检测详情"); box.setIcon(QMessageBox.Icon.Information)
+        box.setText("密钥状态诊断"); box.setDetailedText(detail); box.setInformativeText(reason)
         box.exec()
 
     def _thread_ended(self):
@@ -6656,7 +6656,7 @@ class MainWindow(QMainWindow):
     def _remove_key(self):
         jobs = self._selected_key_jobs()
         if not jobs: return
-        if QMessageBox.question(self, "确认删除", f"确定删除选中�?{len(jobs)} 枚密钥？") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "确认删除", f"确定删除选中的 {len(jobs)} 枚密钥？") != QMessageBox.StandardButton.Yes:
             return
         for provider, item in jobs:
             self.store.remove_key(provider, item["id"])
@@ -6670,7 +6670,7 @@ class MainWindow(QMainWindow):
             try:
                 if thread.isRunning():
                     if manual:
-                        QMessageBox.information(self, "检查更�?, "正在检查中，请稍�?..")
+                        QMessageBox.information(self, "检查更新", "正在检查中，请稍候...")
                     return
             except RuntimeError:
                 self._update_thread = None
@@ -6680,10 +6680,10 @@ class MainWindow(QMainWindow):
         self._update_worker = UpdateCheckWorker(APP_VERSION)
         self._update_worker.moveToThread(self._update_thread)
         self._update_thread.started.connect(self._update_worker.run)
-        # 禁止�?finished 槽里 wait 自己的线程（会死�?跨线程弹窗崩溃）
+        # 禁止在 finished 槽里 wait 自己的线程（会死锁/跨线程弹窗崩溃）
         self._update_worker.finished.connect(
             self._on_update_finished, Qt.ConnectionType.QueuedConnection)
-        # quit 不接收参数，�?lambda 吞掉 signal �?5 个参数，避免槽签名错�?
+        # quit 不接收参数，用 lambda 吞掉 signal 的 5 个参数，避免槽签名错位
         self._update_worker.finished.connect(lambda *_args: self._update_thread and self._update_thread.quit())
         self._update_thread.finished.connect(self._update_thread_cleanup)
         self._update_thread.start()
@@ -6691,7 +6691,7 @@ class MainWindow(QMainWindow):
     def _on_update_finished(self, has_new, latest_version, download_url, filename, error):
         manual = getattr(self, "_update_manual_check", False)
         error_text = str(error or "").strip()
-        # 防御：历史上若槽参数错位，会�?zip/exe 文件名当�?error 弹出「检测失败�?
+        # 防御：历史上若槽参数错位，会把 zip/exe 文件名当成 error 弹出「检测失败」
         if error_text and error_text.lower().endswith((".zip", ".exe", ".msi", ".dmg", ".pkg")):
             if " " not in error_text and "://" not in error_text and len(error_text) < 160:
                 if latest_version and not has_new:
@@ -6700,33 +6700,33 @@ class MainWindow(QMainWindow):
                     error_text = ""
                 else:
                     error_text = (
-                        f"更新检查结果异常，请重试或�?GitHub Releases 手动下载。\n（内部信息：{error_text}�?
+                        f"更新检查结果异常，请重试或到 GitHub Releases 手动下载。\n（内部信息：{error_text}）"
                     )
 
         if error_text:
             if manual:
-                QMessageBox.warning(self, "检查更新失�?, f"检测失败，错误原因：\n{error_text}")
+                QMessageBox.warning(self, "检查更新失败", f"检测失败，错误原因：\n{error_text}")
             return
 
         if has_new:
             if not str(download_url or "").strip():
                 if manual:
                     QMessageBox.warning(
-                        self, "检查更�?,
-                        f"发现新版�?v{latest_version}，但没有可用的下载地址。\n"
-                        "请到 GitHub Releases 页面手动下载�?,
+                        self, "检查更新",
+                        f"发现新版本 v{latest_version}，但没有可用的下载地址。\n"
+                        "请到 GitHub Releases 页面手动下载。",
                     )
                 return
-            package = str(filename or Path(str(download_url).split("?")[0]).name or "安装�?)
+            package = str(filename or Path(str(download_url).split("?")[0]).name or "安装包")
             is_setup = package.lower().endswith(".exe")
             prompt = (
-                f"发现新版�?v{latest_version}（当前版�?v{APP_VERSION}）。\n"
+                f"发现新版本 v{latest_version}（当前版本 v{APP_VERSION}）。\n"
                 f"安装包：{package}\n\n"
                 + ("是否立即下载并运行升级安装程序？" if is_setup else
-                   "是否立即下载绿色免安装包？（下载后请解压覆盖使用�?)
+                   "是否立即下载绿色免安装包？（下载后请解压覆盖使用）")
             )
             reply = QMessageBox.question(
-                self, "检测到新版�?, prompt,
+                self, "检测到新版本", prompt,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
@@ -6736,10 +6736,10 @@ class MainWindow(QMainWindow):
             if manual:
                 shown = latest_version or APP_VERSION
                 QMessageBox.information(
-                    self, "已经是最新版�?,
-                    f"当前版本 v{APP_VERSION} 已经是最新版�?
-                    + (f"（远�?v{shown}�? if shown and shown != APP_VERSION else "")
-                    + "�?,
+                    self, "已经是最新版本",
+                    f"当前版本 v{APP_VERSION} 已经是最新版本"
+                    + (f"（远程 v{shown}）" if shown and shown != APP_VERSION else "")
+                    + "！",
                 )
 
     def _update_thread_cleanup(self):
@@ -6757,17 +6757,17 @@ class MainWindow(QMainWindow):
         if thread is not None:
             try:
                 if thread.isRunning():
-                    QMessageBox.information(self, "下载进行�?, "已有更新包正在下载，请稍候�?)
+                    QMessageBox.information(self, "下载进行中", "已有更新包正在下载，请稍候。")
                     return
             except RuntimeError:
                 self._download_thread = None
 
         QMessageBox.information(
-            self, "开始下�?,
-            "最新版更新包已在后台开始静默下载。下载期间您可以继续正常使用软件，下载完成后将会自动提示您安装�?)
+            self, "开始下载",
+            "最新版更新包已在后台开始静默下载。下载期间您可以继续正常使用软件，下载完成后将会自动提示您安装。")
 
         if not str(url or "").strip():
-            QMessageBox.warning(self, "无法下载", "下载地址为空，请�?GitHub Releases 手动下载�?)
+            QMessageBox.warning(self, "无法下载", "下载地址为空，请到 GitHub Releases 手动下载。")
             return
 
         self._download_thread = QThread(self)
@@ -6793,7 +6793,7 @@ class MainWindow(QMainWindow):
             is_exe = str(file_path).lower().endswith(".exe")
             if is_exe:
                 reply = QMessageBox.question(
-                    self, "新版本下载完�?,
+                    self, "新版本下载完成",
                     "最新版本的升级安装包已在后台下载完成！\n是否现在退出本软件并启动升级安装？",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes
@@ -6805,12 +6805,12 @@ class MainWindow(QMainWindow):
                         self.close()
                     except Exception as e:
                         QMessageBox.warning(
-                            self, "运行安装包失�?,
+                            self, "运行安装包失败",
                             f"启动升级安装程序失败，请手动打开文件安装：\n{file_path}\n错误信息: {e}")
             else:
                 QMessageBox.information(
                     self, "绿色免安装版下载完成",
-                    f"最新版本的绿色免安装压缩包已在后台下载完成！\n\n存储路径：\n{file_path}\n\n请解压该文件后使用新版�?
+                    f"最新版本的绿色免安装压缩包已在后台下载完成！\n\n存储路径：\n{file_path}\n\n请解压该文件后使用新版。"
                 )
                 try:
                     import os
@@ -6826,11 +6826,11 @@ class MainWindow(QMainWindow):
                 box = QMessageBox(self)
                 box.setIcon(QMessageBox.Icon.Warning)
                 box.setWindowTitle("下载失败")
-                box.setText("后台下载升级安装包失败�?)
+                box.setText("后台下载升级安装包失败。")
                 box.setInformativeText(
-                    f"{error}\n\n若网络访�?GitHub 不稳定，请用浏览器打开 Releases 手动下载�?
+                    f"{error}\n\n若网络访问 GitHub 不稳定，请用浏览器打开 Releases 手动下载。"
                 )
-                open_btn = box.addButton("打开下载�?, QMessageBox.ButtonRole.AcceptRole)
+                open_btn = box.addButton("打开下载页", QMessageBox.ButtonRole.AcceptRole)
                 box.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
                 box.exec()
                 if box.clickedButton() is open_btn:
@@ -6877,8 +6877,8 @@ QPushButton:disabled { color:#64748b; background:#172033; }
 QLineEdit, QComboBox, QListWidget, QPlainTextEdit, QTextEdit, QTableWidget { background:#0c1424; border:1px solid #2b3d58; border-radius:5px; padding:4px; selection-background-color:#2563eb; }
 /*
  * SpinBox 数字区：Win11 + 样式表时若宽度不足或按钮 subcontrol 未固定，
- * 数字与后缀会被按钮盖住/裁切，残�?I/O/x/± 等“乱码”。必须：
- * 1) 足够 min-width 容纳�?后缀�?) 明确上下按钮占位，把文字挤在左侧�?
+ * 数字与后缀会被按钮盖住/裁切，残成 I/O/x/± 等“乱码”。必须：
+ * 1) 足够 min-width 容纳值+后缀；2) 明确上下按钮占位，把文字挤在左侧。
  */
 QSpinBox, QDoubleSpinBox {
   background:#0c1424; border:1px solid #2b3d58; border-radius:5px;
@@ -6911,7 +6911,7 @@ QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
 QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
   background: #223654;
 }
-/* 不重绘箭头，保留系统/Qt 默认三角，避�?Win11 上箭头样式把文字区挤�?*/
+/* 不重绘箭头，保留系统/Qt 默认三角，避免 Win11 上箭头样式把文字区挤坏 */
 QGroupBox { background:#101a2b; border:1px solid #293d5c; border-radius:8px; margin-top:8px; padding-top:7px; font-weight:700; }
 QGroupBox::title { subcontrol-origin:margin; left:9px; padding:0 4px; color:#b8c8dc; }
 QHeaderView::section { background:#17243a; color:#cbd5e1; border:none; padding:6px; }
@@ -7011,15 +7011,15 @@ def main():
             "VideoToolkit 已在运行（单实例），本次启动已退出。\n"
             "请到任务栏点「视频工具合集」窗口；若看不到，可在任务管理器结束 "
             "VideoToolkit.exe / python.exe 后再启动。\n"
-            "开发时若要多开，可先关掉已安装版或旧进程�?
+            "开发时若要多开，可先关掉已安装版或旧进程。"
         )
-        write_app_log("程序已在运行，本次重复启动已退出�?, "INFO", "应用")
+        write_app_log("程序已在运行，本次重复启动已退出。", "INFO", "应用")
         try:
             print(msg, flush=True)
         except Exception:
             pass
         _focus_existing_instance()
-        # 尽量弹窗提醒（无事件循环�?MessageBox 仍可用）
+        # 尽量弹窗提醒（无事件循环时 MessageBox 仍可用）
         try:
             import ctypes
             ctypes.windll.user32.MessageBoxW(
@@ -7070,7 +7070,7 @@ def main():
         f"instance={instance_id()}"
     )
     QTimer.singleShot(350, lambda: (window.raise_(), window.activateWindow()))
-    # 打包后自动化启动检查使用；普通用户启动时不会触发�?
+    # 打包后自动化启动检查使用；普通用户启动时不会触发。
     if os.environ.get("VIDEO_TOOLKIT_SMOKE_TEST", "").strip() == "1":
         QTimer.singleShot(1800, app.quit)
     sys.exit(app.exec())
@@ -7091,7 +7091,7 @@ class FeedbackSubmitWorker(QObject):
         
     def run(self):
         try:
-            self.log.emit("正在准备反馈数据与附�?..")
+            self.log.emit("正在准备反馈数据与附件...")
             import base64
             import mimetypes
             import requests
@@ -7107,7 +7107,7 @@ class FeedbackSubmitWorker(QObject):
             for idx, path in enumerate(self.attachments, 1):
                 p = Path(path)
                 if p.is_file():
-                    self.log.emit(f"正在读取并转换附�?({idx}/{len(self.attachments)}): {p.name}...")
+                    self.log.emit(f"正在读取并转换附件 ({idx}/{len(self.attachments)}): {p.name}...")
                     file_bytes = p.read_bytes()
                     base64_str = base64.b64encode(file_bytes).decode("utf-8")
                     mimetype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
@@ -7124,14 +7124,14 @@ class FeedbackSubmitWorker(QObject):
                 "attachments": attachments_payload
             }
             
-            self.log.emit("正在通过 Web App 提交反馈（正在上传附件，这可能需要几分钟，请耐心等待�?..")
+            self.log.emit("正在通过 Web App 提交反馈（正在上传附件，这可能需要几分钟，请耐心等待）...")
             url = "https://script.google.com/macros/s/AKfycbw43iki16bBIfruuF_9YrbrZplvKQgGyYExEtweoDMv7fCQtlMgjqlr9uyCNCapeN_o/exec"
             
             response = requests.post(url, json=payload, timeout=600)
             if response.status_code == 200:
                 res_data = response.json()
                 if res_data.get("success"):
-                    self.finished.emit(True, "反馈已成功通过 Web App 提交！感谢您的反馈�?)
+                    self.finished.emit(True, "反馈已成功通过 Web App 提交！感谢您的反馈。")
                 else:
                     error_msg = res_data.get("error", "未知错误")
                     raise RuntimeError(error_msg)
@@ -7144,7 +7144,7 @@ class FeedbackSubmitWorker(QObject):
 class FeedbackDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("💬 问题反馈与建�?)
+        self.setWindowTitle("💬 问题反馈与建议")
         self.resize(500, 450)
         self.settings = parent.settings if parent and hasattr(parent, "settings") else {}
         
@@ -7152,9 +7152,9 @@ class FeedbackDialog(QDialog):
         layout.setSpacing(12)
         
         info = QLabel(
-            "<b>填写问题反馈�?/b><br/>"
-            "支持上传截图与问题视频�?br/>"
-            "⚠️ <b>注意</b>：Google 限制单次上传最�?50MB。国内网络上传视频较慢，请优先使用图片截图；若上传视频，提交时请耐心等待几分钟�?
+            "<b>填写问题反馈：</b><br/>"
+            "支持上传截图与问题视频。<br/>"
+            "⚠️ <b>注意</b>：Google 限制单次上传最大 50MB。国内网络上传视频较慢，请优先使用图片截图；若上传视频，提交时请耐心等待几分钟。"
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: #93c5fd; background: #1e293b; padding: 10px; border-radius: 5px;")
@@ -7162,7 +7162,7 @@ class FeedbackDialog(QDialog):
         
         form = QFormLayout()
         self.title_input = QLineEdit()
-        self.title_input.setPlaceholderText("一句话简述您的问�?)
+        self.title_input.setPlaceholderText("一句话简述您的问题")
         
         self.content_input = QPlainTextEdit()
         self.content_input.setPlaceholderText("请详细描述您遇到的问题、操作步骤或建议...")
@@ -7171,7 +7171,7 @@ class FeedbackDialog(QDialog):
         form.addRow("问题描述:", self.content_input)
         layout.addLayout(form)
         
-        att_label = QLabel("附件列表 (支持图片、视�?:")
+        att_label = QLabel("附件列表 (支持图片、视频):")
         layout.addWidget(att_label)
         
         self.att_list = QListWidget()
@@ -7218,7 +7218,7 @@ class FeedbackDialog(QDialog):
     def add_attachment(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "选择反馈附件", "",
-            "媒体文件 (*.png *.jpg *.jpeg *.mp4 *.mov *.avi *.mkv);;所有文�?(*.*)"
+            "媒体文件 (*.png *.jpg *.jpeg *.mp4 *.mov *.avi *.mkv);;所有文件 (*.*)"
         )
         if paths:
             for p in paths:
@@ -7255,7 +7255,7 @@ class FeedbackDialog(QDialog):
         self.thread.start()
         
     def on_finished(self, ok, msg):
-        # 勿在 UI 线程长时�?wait 工作线程，避免界面卡�?
+        # 勿在 UI 线程长时间 wait 工作线程，避免界面卡住
         thread = getattr(self, "thread", None)
         if thread is not None:
             try:
