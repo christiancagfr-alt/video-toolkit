@@ -12,7 +12,7 @@ APP_VERSION="${APP_VERSION#v}"
 if [[ -z "$APP_VERSION" && -f "$ROOT_DIR/VERSION" ]]; then
   APP_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 fi
-APP_VERSION="${APP_VERSION:-1.7.65}"
+APP_VERSION="${APP_VERSION:-1.7.66}"
 if [[ ! "$APP_VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
   echo "Invalid application version: $APP_VERSION" >&2
   exit 1

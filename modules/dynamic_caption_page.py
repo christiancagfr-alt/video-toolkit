@@ -5379,9 +5379,16 @@ class CaptionWorker(QObject):
                         pass
                 baked_watermarks={str(Path(path).resolve()) for path in self.settings.get("watermark_baked_videos",[]) }
                 watermark_already_baked=str(video.resolve()) in baked_watermarks
+                # 批量导出永不烧公司水印；只在分组/图文「合成时启用水印」时烧一次
+                export_skip_wm = bool(self.settings.get("export_skip_company_watermark"))
                 stages=[]
                 if burn_captions and (ass_filter or video_settings.get("_qt_caption_pending")): stages.append("字幕")
-                if self.settings.get("watermark_path") and not watermark_already_baked: stages.append("公司水印")
+                if (
+                    self.settings.get("watermark_path")
+                    and not watermark_already_baked
+                    and not export_skip_wm
+                ):
+                    stages.append("公司水印")
                 if any(layer.get("type") in ("mask","text") for layer in self.settings.get("layers",[])): stages.append("图层/蒙版")
                 if any(t.get("mode") == "blur" and t.get("points") for t in (self.settings.get("motion_tracks") or []) if isinstance(t, dict)):
                     stages.append("追踪模糊")
@@ -5725,9 +5732,18 @@ class CaptionWorker(QObject):
                         f"[{index + 1}/{len(self.videos)}] 环境音：{Path(ambient_file).name}"
                         f"（音量 {int(self.settings.get('ambient_volume', 20) or 20)}%）。"
                     )
-                raw_wm_entries=[] if watermark_already_baked else list(self.settings.get("watermarks") or [])
-                watermark_paths=[] if watermark_already_baked else (
-                    self.settings.get("watermark_paths") or [self.settings.get("watermark_path","")]
+                raw_wm_entries = (
+                    []
+                    if (watermark_already_baked or export_skip_wm)
+                    else list(self.settings.get("watermarks") or [])
+                )
+                watermark_paths = (
+                    []
+                    if (watermark_already_baked or export_skip_wm)
+                    else (
+                        self.settings.get("watermark_paths")
+                        or [self.settings.get("watermark_path", "")]
+                    )
                 )
                 image_wm_entries, video_wm_entries = split_watermark_entries(raw_wm_entries)
                 # 兼容旧版仅 path 列表
@@ -7766,7 +7782,10 @@ class DynamicCaptionPage(QWidget):
         group_layout.addStretch(1)
         self.group_burn_watermark=QCheckBox("水印")
         self.group_burn_watermark.setChecked(False)
-        self.group_burn_watermark.setToolTip("合成时烧录当前公司水印；后续导出会自动跳过重复烧录")
+        self.group_burn_watermark.setToolTip(
+            "仅在「合成」时烧录当前启用的公司水印。\n"
+            "批量导出不再添加水印，避免叠两层；不勾选则合成与导出都无水印。"
+        )
 
         # 对应关系改在表格弹窗中集中编辑；保留隐藏编辑器兼容现有断点和选择逻辑。
         self.group_script = QPlainTextEdit(); self.group_script.hide()
@@ -8832,7 +8851,7 @@ class DynamicCaptionPage(QWidget):
         image_editor_layout.addWidget(self.image_quick_combo,2,4)
         layer_layout.addWidget(legacy_image_editor)
 
-        watermark_title=QLabel("公司水印库（多图/视频入库 → 勾选启用本次要用的 → 导出只烧启用项）")
+        watermark_title=QLabel("公司水印库（多图/视频入库 → 勾选启用 → 仅「合成时启用水印」勾选时烧录；批量导出不再加水印）")
         watermark_title.setStyleSheet("color:#7dd3fc;font-weight:700;"); layer_layout.addWidget(watermark_title)
         watermark_tip=QLabel(
             "可先添加多张 Logo 作为资料库；表格里勾选「启用」决定本次预览/导出用哪几张。"
@@ -9367,6 +9386,10 @@ class DynamicCaptionPage(QWidget):
         else:
             watermark_editor_layout.addWidget(self.watermark_table,1)
         self.group_burn_watermark.setText("合成时启用水印")
+        self.group_burn_watermark.setToolTip(
+            "仅在「合成」时烧录当前启用的公司水印。\n"
+            "批量导出不再添加水印，避免叠两层；不勾选则合成与导出都无水印。"
+        )
         watermark_editor_layout.addWidget(self.group_burn_watermark)
         self.proj_burn_watermark.setParent(self)
         self.proj_burn_watermark.hide()
@@ -13173,6 +13196,12 @@ class DynamicCaptionPage(QWidget):
         self.rename_padding.valueChanged.connect(self._save_style_preferences)
         self.rename_custom_titles.textChanged.connect(self._save_style_preferences)
         self.group_burn_watermark.toggled.connect(self._save_style_preferences)
+        if hasattr(self, "provider"):
+            self.provider.currentTextChanged.connect(self._save_style_preferences)
+        if hasattr(self, "asr_language"):
+            self.asr_language.currentTextChanged.connect(self._save_style_preferences)
+        if hasattr(self, "local_whisper_model"):
+            self.local_whisper_model.currentIndexChanged.connect(self._save_style_preferences)
         self.output.textChanged.connect(self._save_style_preferences)
         self.bgm_dir_input.textChanged.connect(self._save_style_preferences)
         self.bgm_selection_mode.currentTextChanged.connect(self._save_style_preferences)
@@ -13880,6 +13909,16 @@ class DynamicCaptionPage(QWidget):
             "timeline_chinese": dict(self.timeline_chinese),
             "output_dir": self.output.text(),
             "writing_language": writing_language_from_ui(self.writing_language.currentText()),
+            "caption_provider": (
+                self.provider.currentText() if hasattr(self, "provider") else ""
+            ),
+            "asr_language": (
+                self.asr_language.currentText() if hasattr(self, "asr_language") else ""
+            ),
+            "local_whisper_model": (
+                str(self.local_whisper_model.currentData() or "")
+                if hasattr(self, "local_whisper_model") else ""
+            ),
             "rtl_word_highlight": self.rtl_word_highlight.isChecked(),
             "proj_bgm_folder": "",
             "proj_img_transition": self.proj_img_transition.currentText() if hasattr(self, "proj_img_transition") else "无转场",
@@ -14322,8 +14361,46 @@ class DynamicCaptionPage(QWidget):
         if "writing_language" in saved or "caption_language" in saved:
             code = str(saved.get("writing_language") or saved.get("caption_language") or "")
             fill_writing_language_combo(self.writing_language, code)
-            if hasattr(self, "asr_language"):
+        # 识别语言单独记忆；未存时再跟书写语言对齐
+        if hasattr(self, "asr_language"):
+            asr_label = str(saved.get("asr_language") or "").strip()
+            if asr_label:
+                matched = False
+                for i in range(self.asr_language.count()):
+                    if self.asr_language.itemText(i) == asr_label:
+                        self.asr_language.setCurrentIndex(i)
+                        matched = True
+                        break
+                if not matched:
+                    fill_writing_language_combo(
+                        self.asr_language,
+                        writing_language_from_ui(asr_label) or asr_label,
+                    )
+            elif "writing_language" in saved or "caption_language" in saved:
+                code = str(saved.get("writing_language") or saved.get("caption_language") or "")
                 fill_writing_language_combo(self.asr_language, code)
+        if "caption_provider" in saved and hasattr(self, "provider"):
+            provider = str(saved.get("caption_provider") or "").strip()
+            if provider and self.provider.findText(provider) >= 0:
+                self.provider.blockSignals(True)
+                self.provider.setCurrentText(provider)
+                self.provider.blockSignals(False)
+                self._sync_local_whisper_model_enabled(provider)
+        if "local_whisper_model" in saved and hasattr(self, "local_whisper_model"):
+            code = str(saved.get("local_whisper_model") or "").strip()
+            if code:
+                idx = next(
+                    (
+                        i for i in range(self.local_whisper_model.count())
+                        if str(self.local_whisper_model.itemData(i) or "") == code
+                        or str(self.local_whisper_model.itemData(i) or "").startswith(code)
+                    ),
+                    -1,
+                )
+                if idx >= 0:
+                    self.local_whisper_model.blockSignals(True)
+                    self.local_whisper_model.setCurrentIndex(idx)
+                    self.local_whisper_model.blockSignals(False)
         if "rtl_word_highlight" in saved:
             self.rtl_word_highlight.setChecked(bool(saved["rtl_word_highlight"]))
 
@@ -16494,6 +16571,40 @@ class DynamicCaptionPage(QWidget):
             return
         self._refresh_canva_timeline(path)
 
+    def _settings_for_batch_export(self):
+        """批量导出设置：永不烧公司水印（只在合成勾选时烧一次）。"""
+        settings = dict(self._current_settings() or {})
+        settings["watermark_path"] = ""
+        settings["watermark_paths"] = []
+        settings["watermarks"] = []
+        settings["watermark_baked_videos"] = list(settings.get("watermark_baked_videos") or [])
+        settings["export_skip_company_watermark"] = True
+        return settings
+
+    def _warn_if_caption_shorter_than_video(self, source: str, word_srt: str, phrase_srt: str = ""):
+        """提取后对比字幕末时刻与视频时长，明显偏短时写日志提示。"""
+        path = str(source or "").strip()
+        if not path or not Path(path).is_file():
+            return
+        try:
+            video_sec = float(media_duration(self.find_ffmpeg(), path, 0.0) or 0.0)
+        except Exception:
+            video_sec = 0.0
+        if video_sec < 15.0:
+            return
+        cue_end = max(
+            srt_max_end_seconds(word_srt or ""),
+            srt_max_end_seconds(phrase_srt or ""),
+        )
+        if cue_end <= 0.05:
+            return
+        ratio = cue_end / video_sec
+        if ratio < 0.85:
+            self._append_run_log(
+                f"⚠ 字幕轴明显短于视频：末字幕 {cue_end:.1f}s / 视频 {video_sec:.1f}s"
+                f"（覆盖 {ratio * 100:.0f}%）。若口播未提前结束，请「重新提取」。"
+            )
+
     def _current_settings(self):
         effect_fields = self._resolved_style_effect_fields() if hasattr(self, "_resolved_style_effect_fields") else {}
         preset = effect_fields.get("preset") or next(
@@ -17773,7 +17884,7 @@ class DynamicCaptionPage(QWidget):
             self._pending_vertical_stack = None
             return
         audios = [self.audios.item(i).text() for i in range(self.audios.count())] if hasattr(self, "audios") else []
-        settings = self._current_settings()
+        settings = self._settings_for_batch_export()
         self.generated_records = []
         self._batch_expected_count = len(videos)
         self.progress.setValue(0)
@@ -19171,6 +19282,32 @@ class DynamicCaptionPage(QWidget):
                 self.override_text.setPlainText(phrase_srt or "")
             if hasattr(self, "canva_timeline") and hasattr(self.canva_timeline, "set_srt"):
                 try:
+                    # 标尺对齐当前视频时长，避免短字幕轴把时间线缩短
+                    video_path = ""
+                    try:
+                        item = self.videos.currentItem() if hasattr(self, "videos") else None
+                        video_path = item.text() if item else (active_video or source)
+                    except Exception:
+                        video_path = active_video or source
+                    if video_path:
+                        try:
+                            dur_ms = int(self._resolve_timeline_duration_ms(str(video_path)) or 0)
+                        except Exception:
+                            dur_ms = 0
+                        if dur_ms <= 80:
+                            try:
+                                dur_ms = int(media_duration(self.find_ffmpeg(), video_path) * 1000)
+                            except Exception:
+                                dur_ms = 0
+                        if dur_ms > 80:
+                            canvas = getattr(self.canva_timeline, "canvas", None) or self.canva_timeline
+                            if hasattr(canvas, "media_source_duration_ms"):
+                                canvas.media_source_duration_ms = max(
+                                    int(getattr(canvas, "media_source_duration_ms", 0) or 0),
+                                    dur_ms,
+                                )
+                            if hasattr(canvas, "duration_ms"):
+                                canvas.duration_ms = max(int(getattr(canvas, "duration_ms", 0) or 0), dur_ms)
                     self.canva_timeline.set_srt(phrase_srt or "")
                 except Exception:
                     pass
@@ -19212,6 +19349,10 @@ class DynamicCaptionPage(QWidget):
                 " 若口播更长：书写语言选对（如希腊语）后点「重新提取」。"
             )
         if fixes: self._append_run_log(f"[{index}/{total}] 已自动修正 {fixes} 处逐句字幕时间重叠。")
+        try:
+            self._warn_if_caption_shorter_than_video(source, srt, phrase_srt)
+        except Exception:
+            pass
         # 关键：必须清掉 live cache 并刷新预览，否则仍显示旧词轴（看起来像「要再提取一次」）
         try:
             self._refresh_caption_preview_after_extract(source, phrase_srt)
@@ -19297,6 +19438,10 @@ class DynamicCaptionPage(QWidget):
                         f"⚠ 识别结果偏少（{cue_count} 条）：{preview or '无正文'}。"
                         " 该片口播为希腊语时，请把「书写语言」选为 Ελληνικά 希腊语 后再次「重新提取」。"
                     )
+                try:
+                    self._warn_if_caption_shorter_than_video(source, result, phrase_srt)
+                except Exception:
+                    pass
                 # Switching tasks while ASR runs must not display another video's text.
                 try:
                     self._refresh_caption_preview_after_extract(source, phrase_srt)
@@ -20156,7 +20301,7 @@ class DynamicCaptionPage(QWidget):
         self._clear_previews_and_releases()
         try: ffmpeg = self.find_ffmpeg()
         except Exception as exc: QMessageBox.critical(self, "缺少组件", str(exc)); return
-        settings = self._current_settings(); self.generated_records = []; self._batch_expected_count=len(videos)
+        settings = self._settings_for_batch_export(); self.generated_records = []; self._batch_expected_count=len(videos)
         self._export_queue_snapshot = {self._timeline_key(path): _media_signature(path) for path in videos}
         # 只有 00_分组合成 中的全部中间视频都进入本次渲染队列，
         # 才在全部最终成品成功后删除目录，避免误删未处理的组。
@@ -20169,6 +20314,13 @@ class DynamicCaptionPage(QWidget):
         self.log.clear(); self.progress.setValue(0)
         self.log_status.setText("任务已开始；详细记录写入“帮助 → 软件日志”")
         self.log_status.setStyleSheet("color:#7dd3fc;font-size:11px;")
+        try:
+            if getattr(self, "_watermark_entries", None) or getattr(self, "_watermark_paths", None):
+                self._append_run_log(
+                    "批量导出不添加公司水印（水印仅在合成勾选「合成时启用水印」时烧录一次）。"
+                )
+        except Exception:
+            pass
         self.thread = QThread(self)
         callback = lambda path: self.transcribe_callable(path, settings["provider"])
         self.worker = CaptionWorker(videos, audios, self.output.text(), ffmpeg, callback, settings)

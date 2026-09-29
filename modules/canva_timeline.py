@@ -747,9 +747,11 @@ class TimelineCanvas(QWidget):
 
     def set_srt(self, srt: str):
         self.clips = parse_srt(srt)
-        self.duration_ms = max(
-            self.duration_ms, max((clip.end for clip in self.clips), default=0), 1000
-        )
+        cue_end = max((clip.end for clip in self.clips), default=0)
+        # 标尺对齐素材时长：短字幕轴不缩短时间线；仅当字幕超出片长时才拉长
+        base = max(int(self.media_source_duration_ms or 0), int(self.duration_ms or 0), 1000)
+        self.duration_ms = max(base, cue_end, 1000)
+        self.media_source_duration_ms = max(int(self.media_source_duration_ms or 0), self.duration_ms)
         self._update_width()
         self.update()
 

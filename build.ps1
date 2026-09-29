@@ -13,7 +13,7 @@ if ([string]::IsNullOrWhiteSpace($version)) {
   $versionFile = Join-Path $root 'VERSION'
   if (Test-Path $versionFile) { $version = (Get-Content -Raw -LiteralPath $versionFile).Trim() }
 }
-if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.65' }
+if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.66' }
 $version = $version.Trim().TrimStart('v')
 if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Invalid application version: $version" }
 $versionHook = Join-Path $env:TEMP ("video_toolkit_version_" + [guid]::NewGuid().ToString('N') + '.py')
@@ -30,8 +30,8 @@ $mediaBin = if ($env:VIDEO_TOOLKIT_MEDIA_BIN) {
 if (-not (Test-Path (Join-Path $mediaBin 'ffmpeg.exe')) -or -not (Test-Path (Join-Path $mediaBin 'ffprobe.exe'))) {
   throw 'FFmpeg and FFprobe were not found. Set VIDEO_TOOLKIT_MEDIA_BIN or place them in tools\ffmpeg\bin.'
 }
-# 必须用 _internal：PyInstaller 启动器固定查找 _internal\python312.dll
-# --noupx：UPX 会弄坏 charset_normalizer 等 Cython/mypyc 扩展，导致启动 ImportError
+# 必须�?_internal：PyInstaller 启动器固定查�?_internal\python312.dll
+# --noupx：UPX 会弄�?charset_normalizer �?Cython/mypyc 扩展，导致启�?ImportError
 python -m PyInstaller --clean --noconfirm --windowed --onedir --noupx --contents-directory '_internal' `
   --name 'VideoToolkit' `
   --icon (Join-Path $root 'logo.ico') `
