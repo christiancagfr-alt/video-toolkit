@@ -587,6 +587,30 @@ class RenamePage(QWidget):
         self.run_btn.setEnabled(True)
         self.log.appendPlainText(message)
         (QMessageBox.information if ok else QMessageBox.critical)(self, "执行完成" if ok else "执行失败", message)
+        if ok:
+            self._clear_task_list_after_success()
+
+    def _clear_task_list_after_success(self):
+        """执行成功后清空本页任务相关输入，避免误对同一批再跑一次。"""
+        self.tasks = []
+        try:
+            self.titles.blockSignals(True)
+            self.titles.clear()
+        finally:
+            self.titles.blockSignals(False)
+        try:
+            self.input.blockSignals(True)
+            self.input.clear()
+        finally:
+            self.input.blockSignals(False)
+        try:
+            self.output.blockSignals(True)
+            self.output.clear()
+        finally:
+            self.output.blockSignals(False)
+        self.progress.setValue(0)
+        self.update_preview()
+        self.log.appendPlainText("已清空任务列表（源文件夹 / 标题 / 预览），可继续添加下一批。")
 
     def _ended(self):
         self.worker = None

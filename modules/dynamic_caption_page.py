@@ -1048,8 +1048,35 @@ def caption_clock_segments(state, external=False):
     return list(tracks.get("video") or [])
 
 
+def video_segments_are_product_clock_identity(segments) -> bool:
+    """分组合成辅助分段：timeline 与 source 一一对应、首尾相接，已在成品时钟上。
+
+    这类多段条只是方便定位某段，不是「从更长源片裁切」；不能当成切片去烘焙重提，
+    否则会误伤「快速声音边界」合成后再提取的口型对齐。
+    """
+    segs = _normalize_video_segments(segments)
+    if len(segs) < 2:
+        return False
+    cursor = 0.0
+    for tl0, tl1, src0, src1 in segs:
+        if abs(tl0 - src0) > 0.05 or abs(tl1 - src1) > 0.05:
+            return False
+        if abs((tl1 - tl0) - (src1 - src0)) > 0.08:
+            return False
+        if tl0 < cursor - 0.08:
+            return False
+        if tl0 > cursor + 0.12:
+            return False
+        cursor = tl1
+    return cursor >= 0.2
+
+
 def video_segments_need_caption_retime(segments) -> bool:
     """True when timeline video cuts would move speech relative to a source-timed SRT."""
+    # 分组合成成品的多段条已是成品时钟，不需要按「源片切片」重映射/烘焙
+    # （须传原始 dict 列表；normalize 后的 tuple 无法再被 identity 识别）
+    if video_segments_are_product_clock_identity(segments):
+        return False
     segs = _normalize_video_segments(segments)
     if not segs:
         return False
@@ -1475,6 +1502,17 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
                and int(segments[0].get("source_start",0))<=5
                and abs(int(segments[0].get("source_end",original_duration))-original_duration)<=20
                and abs(first_speed-1.0)<0.01)
+    # 分组合成辅助多段（成品时钟、未手改）：烘焙结果应等于原片，直接跳过避免损伤时间戳
+    if (
+        not unchanged
+        and not image_paths
+        and not external_video_paths
+        and abs(first_speed - 1.0) < 0.01
+        and video_segments_are_product_clock_identity(segments)
+    ):
+        norm = _normalize_video_segments(segments)
+        if norm and norm[0][0] <= 0.05 and abs(norm[-1][1] * 1000 - original_duration) <= 120:
+            unchanged = True
     original_audio_enabled=bool((state or {}).get("original_audio_enabled",True))
     if unchanged and original_audio_enabled and not transitions:
         return source
@@ -11428,6 +11466,14 @@ class DynamicCaptionPage(QWidget):
             self.selection_debounce_timer.stop()
         self._pending_video_path = None
         self._clear_previews_and_releases()
+        # 清掉成品时长缓存，避免沿用上一段短片的播放器时长（合成后字幕/音画对不齐）
+        if not hasattr(self, "_media_duration_cache") or self._media_duration_cache is None:
+            self._media_duration_cache = {}
+        for path in outputs:
+            try:
+                self._media_duration_cache.pop(self._timeline_key(path), None)
+            except Exception:
+                pass
 
         replace_queue = bool(getattr(self, "_group_merge_replace_queue", False))
         if replace_queue and not only_session:
@@ -16582,7 +16628,7 @@ class DynamicCaptionPage(QWidget):
         return settings
 
     def _warn_if_caption_shorter_than_video(self, source: str, word_srt: str, phrase_srt: str = ""):
-        """提取后对比字幕末时刻与视频时长，明显偏短时写日志提示。"""
+        """提取后对比字幕末时刻与视频时长，明显偏短/偏长时写日志提示。"""
         path = str(source or "").strip()
         if not path or not Path(path).is_file():
             return
@@ -16590,7 +16636,7 @@ class DynamicCaptionPage(QWidget):
             video_sec = float(media_duration(self.find_ffmpeg(), path, 0.0) or 0.0)
         except Exception:
             video_sec = 0.0
-        if video_sec < 15.0:
+        if video_sec < 3.0:
             return
         cue_end = max(
             srt_max_end_seconds(word_srt or ""),
@@ -16598,12 +16644,24 @@ class DynamicCaptionPage(QWidget):
         )
         if cue_end <= 0.05:
             return
-        ratio = cue_end / video_sec
-        if ratio < 0.85:
+        ratio = cue_end / video_sec if video_sec > 1e-3 else 0.0
+        if video_sec >= 15.0 and ratio < 0.85:
             self._append_run_log(
                 f"⚠ 字幕轴明显短于视频：末字幕 {cue_end:.1f}s / 视频 {video_sec:.1f}s"
                 f"（覆盖 {ratio * 100:.0f}%）。若口播未提前结束，请「重新提取」。"
             )
+        # 字幕远长于片长：常见于时长缓存串片 / 误用源片识别结果挂到短成品
+        if cue_end > video_sec + max(2.0, video_sec * 0.15):
+            self._append_run_log(
+                f"⚠ 字幕轴明显长于视频：末字幕 {cue_end:.1f}s / 视频 {video_sec:.1f}s。"
+                "时间轴已按视频片长锁定；请确认选中的是合成成品后「重新提取」。"
+            )
+            # 清掉可能串进来的错误短时长缓存，下次刷新用 ffprobe
+            try:
+                key = self._timeline_key(path)
+                self._media_duration_cache.pop(key, None)
+            except Exception:
+                pass
 
     def _current_settings(self):
         effect_fields = self._resolved_style_effect_fields() if hasattr(self, "_resolved_style_effect_fields") else {}
@@ -17994,6 +18052,13 @@ class DynamicCaptionPage(QWidget):
             return True
         if any(str(s.get("media_type", "video")) in ("image", "external_video") for s in segs):
             return True
+        # 分组合成辅助多段：未手改时不算「切片编辑」
+        if (
+            state.get("segmented")
+            and not state.get("user_edited")
+            and video_segments_are_product_clock_identity(segs)
+        ):
+            return False
         if len(segs) > 1:
             return True
         # 单段但裁过片头/片尾
@@ -18223,7 +18288,10 @@ class DynamicCaptionPage(QWidget):
                 player_matches = self._timeline_key(loaded) == video_key
             except Exception:
                 player_matches = Path(loaded).name == Path(path).name
-        if player_ms > 0 and (player_matches or not loaded):
+        # 仅当播放器正在播「当前这份素材」时才采信其时长。
+        # 切到新成品时 _preview_loaded_path 可能仍空/旧片，绝不能把上一段短片时长写进新键
+        # （否则分组合成后时间轴会卡在几秒，字幕却跑到 1 分多 → 音画完全对不上）。
+        if player_ms > 0 and player_matches:
             self._media_duration_cache[video_key] = player_ms
             return player_ms
         cached = int(self._media_duration_cache.get(video_key) or 0)
@@ -18746,6 +18814,7 @@ class DynamicCaptionPage(QWidget):
             QMessageBox.information(self,"没有音频","请先选中一个音频；未添加音频时也可以选中包含声音的视频。"); return
         if self.timeline_thread and self.timeline_thread.isRunning(): return
         # 已切片：必须按成品音轨重提，否则会从完整源片识别再硬映射 → 口型必偏
+        # 例外：分组合成的多段辅助条已在成品时钟上（非用户裁切）→ 直接对成品提取
         try:
             key = self._current_video_key()
             state = dict(self.timeline_edit_states.get(key, {}) or {})
@@ -18755,7 +18824,16 @@ class DynamicCaptionPage(QWidget):
                 except Exception:
                     pass
             segs = list((state.get("tracks") or {}).get("video") or [])
-            if key and (video_segments_need_caption_retime(segs) or self._timeline_edits_active(state)):
+            identity_product = bool(
+                state.get("segmented")
+                and not state.get("user_edited")
+                and video_segments_are_product_clock_identity(segs)
+            )
+            if identity_product:
+                self._append_run_log(
+                    "当前为分组合成成品分段条（成品时钟）：直接对成品提取，不走切片烘焙。"
+                )
+            elif key and (video_segments_need_caption_retime(segs) or self._timeline_edits_active(state)):
                 self._append_run_log(
                     "检测到时间轴切片：改为「按成品音轨重新提取」（避免源片识别+映射导致口型不准）。"
                 )

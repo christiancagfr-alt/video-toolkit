@@ -316,8 +316,12 @@ class TimelineCanvas(QWidget):
         self.original_audio_enabled = bool(original_audio_enabled)
         self.clips = parse_srt(srt)
         cue_end = max((clip.end for clip in self.clips), default=0)
-        self.duration_ms = max(self.duration_ms, cue_end, 1000)
-        self.media_source_duration_ms = max(self.media_source_duration_ms, self.duration_ms)
+        # 音画轨长度锁定传入的素材时长；错位长字幕只拉长可滚动区域，不把视频/原声条撑长
+        media_lock = max(int(self.media_source_duration_ms or 0), 1000)
+        if cue_end > media_lock + 200:
+            self.duration_ms = max(media_lock, cue_end)
+        else:
+            self.duration_ms = media_lock
         project_key = str(video_name or "")
         tracks_state = (edit_state or {}).get("tracks") or {}
         is_new_project = project_key != self._project_key
@@ -748,10 +752,13 @@ class TimelineCanvas(QWidget):
     def set_srt(self, srt: str):
         self.clips = parse_srt(srt)
         cue_end = max((clip.end for clip in self.clips), default=0)
-        # 标尺对齐素材时长：短字幕轴不缩短时间线；仅当字幕超出片长时才拉长
-        base = max(int(self.media_source_duration_ms or 0), int(self.duration_ms or 0), 1000)
-        self.duration_ms = max(base, cue_end, 1000)
-        self.media_source_duration_ms = max(int(self.media_source_duration_ms or 0), self.duration_ms)
+        # 标尺锁定素材时长：短轴不缩短；长轴也不把音画轨拉长（避免错字幕把时间线撑飞）
+        media_lock = max(int(self.media_source_duration_ms or 0), 1000)
+        if cue_end > media_lock + 200:
+            # 仅拉长可滚动区域，方便看到越界字幕；音画条仍停在 media_lock
+            self.duration_ms = max(media_lock, cue_end)
+        else:
+            self.duration_ms = media_lock
         self._update_width()
         self.update()
 
