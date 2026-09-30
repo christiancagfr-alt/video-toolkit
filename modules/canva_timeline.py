@@ -759,6 +759,15 @@ class TimelineCanvas(QWidget):
             self.duration_ms = max(media_lock, cue_end)
         else:
             self.duration_ms = media_lock
+        # 单条未切片音画轨若短于素材锁，补齐到 media_lock（合成后只 set_srt 时常见）
+        for kind in ("video", "original_audio"):
+            bars = self.media_clips.get(kind) or []
+            if len(bars) == 1 and int(bars[0].end or 0) + 80 < media_lock and int(bars[0].start or 0) <= 40:
+                clip = bars[0]
+                clip.end = media_lock
+                if int(clip.source_end or 0) < media_lock:
+                    clip.source_end = media_lock
+                clip.source_duration = max(int(clip.source_duration or 0), media_lock)
         self._update_width()
         self.update()
 

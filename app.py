@@ -79,7 +79,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.68").strip().lstrip("v") or "1.7.68"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.69").strip().lstrip("v") or "1.7.69"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 _SINGLE_INSTANCE_MUTEX = None
 ALL_RESULTS_LABEL = "【全部结果】"
@@ -1444,68 +1444,84 @@ class TranscribeWorker(QObject):
             return current
 
         def _transcribe_long_chunked(model, wav_path, total_dur, *, use_vad=None):
-            """≥90s：按段识别再拼时间戳，避免一次跑完整长片词轴漂移/截断。"""
+            """≥90s：重叠分段识别再拼时间戳，避免整段截断，也避免无重叠硬切丢边界词。
+
+            旧实现用 ffmpeg segment 无重叠切片，却按 overlap 丢掉下一段开头词，
+            会在每 75s 边界制造缺口；合成成品再提取时时间轴更容易看起来「对不齐」。
+            """
             import tempfile
             creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            chunk_len, overlap = 75.0, 1.5
+            chunk_len, overlap = 75.0, 2.0
+            step = max(45.0, chunk_len - overlap)
+            total_dur = max(0.5, float(total_dur or 0.5))
+            starts = []
+            cursor = 0.0
+            while cursor < total_dur - 0.4:
+                starts.append(cursor)
+                if cursor + chunk_len >= total_dur - 0.2:
+                    break
+                cursor += step
+            if not starts:
+                starts = [0.0]
             chunk_dir = Path(tempfile.mkdtemp(prefix="vt_whisper_chunks_"))
-            pattern = chunk_dir / "c_%04d.wav"
-            cmd = [
-                self.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-                "-i", str(wav_path), "-map", "0:a:0",
-                "-f", "segment", "-segment_time", str(int(chunk_len)),
-                "-reset_timestamps", "1", "-ac", "1", "-ar", "16000",
-                "-c:a", "pcm_s16le", str(pattern),
-            ]
-            _emit(f"长音频（{total_dur:.0f}s）分段识别：每段约 {int(chunk_len)}s …")
-            proc = subprocess.run(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                creationflags=creation, text=True, encoding="utf-8", errors="replace",
+            _emit(
+                f"长音频（{total_dur:.0f}s）分段识别：每段约 {int(chunk_len)}s，"
+                f"重叠 {overlap:.0f}s，共 {len(starts)} 段…"
             )
-            chunks = sorted(chunk_dir.glob("c_*.wav"))
-            if proc.returncode != 0 or not chunks:
-                err = (proc.stderr or "")[-300:]
-                _emit(f"分段失败，回退整段识别：{err or 'unknown'}")
+            all_segs = []
+            info = None
+            try:
+                for i, offset in enumerate(starts):
+                    if self.cancelled:
+                        raise RuntimeError("任务已取消")
+                    this_len = min(chunk_len, max(0.5, total_dur - offset))
+                    chunk = chunk_dir / f"c_{i:04d}.wav"
+                    cmd = [
+                        self.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
+                        "-ss", f"{offset:.3f}", "-t", f"{this_len:.3f}",
+                        "-i", str(wav_path), "-map", "0:a:0",
+                        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                        str(chunk),
+                    ]
+                    proc = subprocess.run(
+                        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                        creationflags=creation, text=True, encoding="utf-8", errors="replace",
+                    )
+                    if proc.returncode != 0 or not chunk.is_file() or chunk.stat().st_size < 1000:
+                        err = (proc.stderr or "")[-200:]
+                        _emit(f"分段 {i + 1} 抽取失败，回退整段识别：{err or 'unknown'}")
+                        return None
+                    try:
+                        chunk_dur = float(video_duration(self.ffmpeg_path, str(chunk)) or 0)
+                    except Exception:
+                        chunk_dur = 0.0
+                    if chunk_dur <= 0.05:
+                        chunk_dur = float(this_len)
+                    _emit(
+                        f"本地识别分段 {i + 1}/{len(starts)}"
+                        f"（起点 {offset:.0f}s，本段约 {chunk_dur:.0f}s）…"
+                    )
+                    segs, info = transcribe_file(
+                        model, chunk, offset=offset, use_vad=use_vad,
+                        label=f"[{i + 1}/{len(starts)}]",
+                    )
+                    # 重叠区保留前一段结果，丢掉本段落在 overlap 前半的词，避免重复/粘连
+                    if all_segs and i > 0 and overlap > 0:
+                        cut = offset + overlap * 0.5
+                        segs = [s for s in segs if float(s.get("start") or 0) >= cut]
+                        for s in segs:
+                            s["words"] = [
+                                w for w in (s.get("words") or [])
+                                if float(w.get("start") or 0) >= cut
+                            ]
+                    all_segs.extend(segs)
+            finally:
                 try:
                     shutil.rmtree(chunk_dir, ignore_errors=True)
                 except Exception:
                     pass
+            if not all_segs:
                 return None
-            all_segs = []
-            info = None
-            offset = 0.0
-            for i, chunk in enumerate(chunks):
-                if self.cancelled:
-                    raise RuntimeError("任务已取消")
-                try:
-                    chunk_dur = float(video_duration(self.ffmpeg_path, str(chunk)) or 0)
-                except Exception:
-                    chunk_dur = 0.0
-                if chunk_dur <= 0.05:
-                    chunk_dur = float(chunk_len)
-                _emit(
-                    f"本地识别分段 {i + 1}/{len(chunks)}"
-                    f"（起点 {offset:.0f}s，本段约 {chunk_dur:.0f}s）…"
-                )
-                segs, info = transcribe_file(
-                    model, chunk, offset=offset, use_vad=use_vad,
-                    label=f"[{i + 1}/{len(chunks)}]",
-                )
-                # 段边界去重：丢掉紧贴本段起点的重复词（相邻段偶发粘连）
-                if all_segs and overlap > 0:
-                    cut = offset + min(overlap * 0.35, max(0.15, chunk_dur * 0.02))
-                    segs = [s for s in segs if float(s.get("start") or 0) >= cut]
-                    for s in segs:
-                        s["words"] = [
-                            w for w in (s.get("words") or [])
-                            if float(w.get("start") or 0) >= cut
-                        ]
-                all_segs.extend(segs)
-                offset += chunk_dur
-            try:
-                shutil.rmtree(chunk_dir, ignore_errors=True)
-            except Exception:
-                pass
             return all_segs, info
 
         try:

@@ -7606,16 +7606,42 @@ class DynamicCaptionPage(QWidget):
         self.stop.setStyleSheet("background:#991b1b;color:white;border-color:#fca5a5;padding:3px 8px;min-height:18px;")
         
         self.start=QPushButton("批量导出")
-        self.start.setToolTip("开始批量渲染并导出全部任务成品")
+        self.start.setToolTip(
+            "按下方「导出选项」渲染队列中的视频。\n"
+            "可直接处理已合成成品：只加水印、只烧字幕、或两者都做；\n"
+            "不必再走分组合成。蒙版/图层/重命名仍按当前设置生效。"
+        )
         self.start.setObjectName("primary")
         self.start.setStyleSheet("padding:3px 12px;min-height:18px;")
         self.start.clicked.connect(self.run)
+
+        # 导出选项：与「分组合成」解耦。成品直接进视频字幕队列时只勾需要的步骤。
+        self.export_burn_captions = QCheckBox("烧录字幕")
+        self.export_burn_captions.setChecked(True)
+        self.export_burn_captions.setToolTip(
+            "勾选：批量导出时烧录已有字幕；若无时间轴会现场识别（本地 Whisper 可能较慢）。\n"
+            "不勾选：不识别、不烧字幕——适合成品只加水印/蒙版/重命名。\n"
+            "与分组合成里的「不转文案」独立；这里只控制「批量导出」。"
+        )
+        self.export_burn_watermark = QCheckBox("加水印")
+        self.export_burn_watermark.setChecked(False)
+        self.export_burn_watermark.setToolTip(
+            "勾选：批量导出时烧录当前启用的公司水印（合成时忘了加、或成品后补加）。\n"
+            "不勾选：导出不加公司水印（避免与合成时已烧录的水印叠两层）。\n"
+            "与「合成时启用水印」独立；合成勾选只影响合成，这里只影响导出。"
+        )
+        for _export_opt in (self.export_burn_captions, self.export_burn_watermark):
+            _export_opt.setStyleSheet("color:#e2e8f0;font-size:11px;")
+            try:
+                _export_opt.toggled.connect(self._save_style_preferences)
+            except Exception:
+                pass
 
         header = QHBoxLayout()
         heading = QLabel("Reels 视频编辑器")
         heading.setObjectName("heading")
         
-        flow_label = QLabel(" 合成 → 批量字幕 → 批量配音 → 字幕样式 → 添加水印 → 批量重命名 → 批量导出 → 批量上传与填表")
+        flow_label = QLabel(" 合成 → 批量字幕 → 样式/水印 → 导出(可选字幕·水印) → 上传")
         self.flow_label = flow_label
         flow_label.setStyleSheet("font-size:11px;color:#94a3b8;margin-left:8px;")
         
@@ -7628,6 +7654,9 @@ class DynamicCaptionPage(QWidget):
         header.addWidget(self.progress)
         header.addWidget(self.progress_value)
         header.addWidget(self.view_log_btn)
+        header.addWidget(QLabel("导出:"))
+        header.addWidget(self.export_burn_captions)
+        header.addWidget(self.export_burn_watermark)
         header.addWidget(self.stop)
         header.addWidget(self.start)
         root.addLayout(header)
@@ -7781,12 +7810,11 @@ class DynamicCaptionPage(QWidget):
         # 不转文案：合成后不自动提取字幕；自然排序时合成阶段也不跑 ASR（改用声音边界）
         self.group_skip_transcript = QCheckBox("不转文案")
         self.group_skip_transcript.setToolTip(
-            "勾选后：\n"
-            "1）合成结束后不会自动提取字幕/转中文；\n"
+            "仅影响「分组合成」：\n"
+            "1）合成结束后不会自动提取字幕；\n"
             "2）文件名自然排序时，合成阶段也不跑语音识别（强制用快速声音边界去口气）；\n"
-            "3）批量导出成品不烧录字幕（可直接导出无文案视频；轨道预览仅临时查看，不写入成品）。\n"
-            "需要字幕请取消勾选，或合成后再点「批量提取」再导出。\n"
-            "仅当排序为「按分段文案匹配」时，合成中仍会识别语音用于排序。"
+            "批量导出是否烧字幕，请用顶栏「烧录字幕」勾选，与本项独立。\n"
+            "成品直接加入视频字幕队列时，不必依赖本项——只勾导出选项即可。"
         )
         self.group_skip_transcript.setChecked(False)
         # 合成时是否按重命名规则立刻改名（默认关；导出时再命名）
@@ -7821,8 +7849,9 @@ class DynamicCaptionPage(QWidget):
         self.group_burn_watermark=QCheckBox("水印")
         self.group_burn_watermark.setChecked(False)
         self.group_burn_watermark.setToolTip(
-            "仅在「合成」时烧录当前启用的公司水印。\n"
-            "批量导出不再添加水印，避免叠两层；不勾选则合成与导出都无水印。"
+            "仅在「分组合成」时烧录当前启用的公司水印。\n"
+            "合成后忘了加水印、或成品直接进队列：请勾顶栏「加水印」再批量导出。\n"
+            "两项独立，避免叠两层——合成已烧过的不要再勾导出加水印。"
         )
 
         # 对应关系改在表格弹窗中集中编辑；保留隐藏编辑器兼容现有断点和选择逻辑。
@@ -8889,7 +8918,10 @@ class DynamicCaptionPage(QWidget):
         image_editor_layout.addWidget(self.image_quick_combo,2,4)
         layer_layout.addWidget(legacy_image_editor)
 
-        watermark_title=QLabel("公司水印库（多图/视频入库 → 勾选启用 → 仅「合成时启用水印」勾选时烧录；批量导出不再加水印）")
+        watermark_title=QLabel(
+            "公司水印库（多图/视频入库 → 勾选启用 → 「合成时启用水印」在合成时烧；"
+            "顶栏「加水印」在批量导出时烧；两者独立，勿重复叠层）"
+        )
         watermark_title.setStyleSheet("color:#7dd3fc;font-weight:700;"); layer_layout.addWidget(watermark_title)
         watermark_tip=QLabel(
             "可先添加多张 Logo 作为资料库；表格里勾选「启用」决定本次预览/导出用哪几张。"
@@ -9425,10 +9457,17 @@ class DynamicCaptionPage(QWidget):
             watermark_editor_layout.addWidget(self.watermark_table,1)
         self.group_burn_watermark.setText("合成时启用水印")
         self.group_burn_watermark.setToolTip(
-            "仅在「合成」时烧录当前启用的公司水印。\n"
-            "批量导出不再添加水印，避免叠两层；不勾选则合成与导出都无水印。"
+            "仅在「分组合成」时烧录当前启用的公司水印。\n"
+            "合成后补加水印：勾顶栏「加水印」再批量导出（与本项独立）。"
         )
         watermark_editor_layout.addWidget(self.group_burn_watermark)
+        export_wm_tip = QLabel(
+            "成品直接进「视频字幕」队列时：请用窗口顶栏「加水印 / 烧录字幕」勾选需要的导出步骤，"
+            "不必再走分组合成。"
+        )
+        export_wm_tip.setWordWrap(True)
+        export_wm_tip.setStyleSheet("color:#7dd3fc;font-size:11px;padding:4px 0;")
+        watermark_editor_layout.addWidget(export_wm_tip)
         self.proj_burn_watermark.setParent(self)
         self.proj_burn_watermark.hide()
         watermark_mode_editor=QHBoxLayout()
@@ -11466,12 +11505,22 @@ class DynamicCaptionPage(QWidget):
             self.selection_debounce_timer.stop()
         self._pending_video_path = None
         self._clear_previews_and_releases()
-        # 清掉成品时长缓存，避免沿用上一段短片的播放器时长（合成后字幕/音画对不齐）
+        # 清掉成品时长缓存，并立刻 ffprobe 写入真实时长。
+        # 若等播放器 durationChanged，提取完成时音视频条仍可能是旧短尺，字幕块就会视觉错位。
         if not hasattr(self, "_media_duration_cache") or self._media_duration_cache is None:
             self._media_duration_cache = {}
+        try:
+            ff = self.find_ffmpeg()
+        except Exception:
+            ff = None
         for path in outputs:
             try:
-                self._media_duration_cache.pop(self._timeline_key(path), None)
+                key = self._timeline_key(path)
+                self._media_duration_cache.pop(key, None)
+                if ff:
+                    sec = float(media_duration(ff, path, fallback=0.0) or 0.0)
+                    if sec > 0.05:
+                        self._media_duration_cache[key] = max(1000, int(round(sec * 1000)))
             except Exception:
                 pass
 
@@ -11619,14 +11668,19 @@ class DynamicCaptionPage(QWidget):
         self._append_run_log("分组合成任务已释放，可以直接开始下一次任务。")
         if should_extract and extract_paths:
             self.run_status.setText("当前状态：合成完成，正在提取字幕")
+            # 稍等预览/时长缓存落稳，避免第一趟提取完成时时间轴仍按旧短尺画音视频条
+            extract_delay_ms = 350
             if extract_paths and len(extract_paths) < max(1, self.videos.count()):
                 self._append_run_log(
                     f"已启用“合成并转文字”：仅为本次 {len(extract_paths)} 个成品提取字幕，其它组字幕保留。"
                 )
-                QTimer.singleShot(0, lambda paths=extract_paths: self._extract_timelines_for_paths(paths))
+                QTimer.singleShot(
+                    extract_delay_ms,
+                    lambda paths=extract_paths: self._extract_timelines_for_paths(paths),
+                )
             else:
                 self._append_run_log("已启用“合成并转文字”：现在开始对合成成品提取字幕。")
-                QTimer.singleShot(0, self.extract_all_timelines)
+                QTimer.singleShot(extract_delay_ms, self.extract_all_timelines)
         elif not should_extract:
             self._append_run_log("未启动自动转文字（「不转文案」或未勾选「合成并转文字」）。")
 
@@ -13950,6 +14004,14 @@ class DynamicCaptionPage(QWidget):
             "rename_padding": self.rename_padding.value(),
             "rename_titles": self._rename_titles_list(),
             "group_burn_watermark": self.group_burn_watermark.isChecked(),
+            "export_burn_captions": (
+                self.export_burn_captions.isChecked()
+                if hasattr(self, "export_burn_captions") else True
+            ),
+            "export_burn_watermark": (
+                self.export_burn_watermark.isChecked()
+                if hasattr(self, "export_burn_watermark") else False
+            ),
             "watermark_paths": list(self._watermark_paths),
             "watermarks": [dict(item) for item in self._watermark_entries],
             "timeline_chinese": dict(self.timeline_chinese),
@@ -14404,6 +14466,10 @@ class DynamicCaptionPage(QWidget):
                 )
         if "group_burn_watermark" in saved:
             self.group_burn_watermark.setChecked(bool(saved["group_burn_watermark"]))
+        if "export_burn_captions" in saved and hasattr(self, "export_burn_captions"):
+            self.export_burn_captions.setChecked(bool(saved["export_burn_captions"]))
+        if "export_burn_watermark" in saved and hasattr(self, "export_burn_watermark"):
+            self.export_burn_watermark.setChecked(bool(saved["export_burn_watermark"]))
         if "writing_language" in saved or "caption_language" in saved:
             code = str(saved.get("writing_language") or saved.get("caption_language") or "")
             fill_writing_language_combo(self.writing_language, code)
@@ -16617,14 +16683,41 @@ class DynamicCaptionPage(QWidget):
             return
         self._refresh_canva_timeline(path)
 
+    def _export_wants_captions(self) -> bool:
+        """顶栏「烧录字幕」；未创建控件时回退到分组「不转文案」的反义。"""
+        if hasattr(self, "export_burn_captions"):
+            return bool(self.export_burn_captions.isChecked())
+        if hasattr(self, "group_skip_transcript"):
+            return not bool(self.group_skip_transcript.isChecked())
+        return True
+
+    def _export_wants_watermark(self) -> bool:
+        """顶栏「加水印」：成品补加水印时勾选；默认关以免叠两层。"""
+        if hasattr(self, "export_burn_watermark"):
+            return bool(self.export_burn_watermark.isChecked())
+        return False
+
     def _settings_for_batch_export(self):
-        """批量导出设置：永不烧公司水印（只在合成勾选时烧一次）。"""
+        """批量导出设置：按顶栏勾选决定是否烧字幕/公司水印（与分组合成解耦）。"""
         settings = dict(self._current_settings() or {})
-        settings["watermark_path"] = ""
-        settings["watermark_paths"] = []
-        settings["watermarks"] = []
         settings["watermark_baked_videos"] = list(settings.get("watermark_baked_videos") or [])
-        settings["export_skip_company_watermark"] = True
+        want_wm = self._export_wants_watermark()
+        has_wm = bool(
+            active_watermark_entries(settings.get("watermarks") or [])
+            or settings.get("watermark_path")
+            or settings.get("watermark_paths")
+        )
+        if want_wm and has_wm:
+            # 保留 _current_settings 里的水印列表；已在合成烧过的单片仍按 baked 列表跳过
+            settings["export_skip_company_watermark"] = False
+        else:
+            settings["watermark_path"] = ""
+            settings["watermark_paths"] = []
+            settings["watermarks"] = []
+            settings["export_skip_company_watermark"] = True
+        want_caps = self._export_wants_captions()
+        settings["skip_captions"] = not want_caps
+        settings["skip_post_transcript"] = not want_caps
         return settings
 
     def _warn_if_caption_shorter_than_video(self, source: str, word_srt: str, phrase_srt: str = ""):
@@ -16794,13 +16887,9 @@ class DynamicCaptionPage(QWidget):
                     getattr(self, "video_style_overrides", {}) or {}, ensure_ascii=False
                 )),
                 "motion_tracks": json.loads(json.dumps(self.motion_tracks, ensure_ascii=False)),
-                # 不转文案：批量导出不跑 ASR、不烧录字幕（预览样例不进成品）
-                "skip_captions": bool(
-                    hasattr(self, "group_skip_transcript") and self.group_skip_transcript.isChecked()
-                ),
-                "skip_post_transcript": bool(
-                    hasattr(self, "group_skip_transcript") and self.group_skip_transcript.isChecked()
-                ),
+                # 顶栏「烧录字幕」关闭时：不跑 ASR、不烧录（成品只加水印/蒙版时用）
+                "skip_captions": not self._export_wants_captions(),
+                "skip_post_transcript": not self._export_wants_captions(),
                 }
         # 仅附加有效语义参数；禁止写入 None（否则 layout 里 float(get) 会崩）
         for key in (
@@ -18270,7 +18359,11 @@ class DynamicCaptionPage(QWidget):
         self._refresh_canva_timeline(video_path)
 
     def _resolve_timeline_duration_ms(self, video_path: str) -> int:
-        """优先播放器时长（且路径匹配），否则缓存 / ffprobe，保证分段轨不必等预览解码。"""
+        """优先播放器时长（且路径匹配），否则 ffprobe / 缓存，保证分段轨不必等预览解码。
+
+        分组合成 sidecar 合计可能与成品真实时长差几百毫秒～数秒（去口气/转场），
+        绝不能单独用 sidecar 锁死标尺，否则字幕块会和音视频条错位。
+        """
         path = str(video_path or "")
         if not path:
             return 0
@@ -18295,27 +18388,38 @@ class DynamicCaptionPage(QWidget):
             self._media_duration_cache[video_key] = player_ms
             return player_ms
         cached = int(self._media_duration_cache.get(video_key) or 0)
-        if cached > 0:
-            return cached
-        # sidecar 总时长作备选（不依赖 ffprobe）
+        sidecar_ms = 0
         try:
             data = load_group_segments_map(path)
             if data:
-                total = sum(max(0, int(s.get("duration_ms") or 0)) for s in (data.get("segments") or []))
-                if total >= 200:
-                    self._media_duration_cache[video_key] = total
-                    return total
+                sidecar_ms = sum(
+                    max(0, int(s.get("duration_ms") or 0))
+                    for s in (data.get("segments") or [])
+                )
         except Exception:
-            pass
-        try:
-            ff = self.find_ffmpeg()
-            sec = float(media_duration(ff, path, fallback=0.0) or 0.0)
-            if sec > 0.05:
-                ms = max(1000, int(round(sec * 1000)))
-                self._media_duration_cache[video_key] = ms
-                return ms
-        except Exception:
-            pass
+            sidecar_ms = 0
+        # 已有缓存时：若与 sidecar 差很大，清掉缓存并重新探测（合成成品常见）
+        need_probe = cached <= 0
+        if cached > 0 and sidecar_ms >= 200 and abs(cached - sidecar_ms) > 800:
+            need_probe = True
+        if need_probe:
+            probed_ms = 0
+            try:
+                ff = self.find_ffmpeg()
+                sec = float(media_duration(ff, path, fallback=0.0) or 0.0)
+                if sec > 0.05:
+                    probed_ms = max(1000, int(round(sec * 1000)))
+            except Exception:
+                probed_ms = 0
+            if probed_ms >= 200:
+                self._media_duration_cache[video_key] = probed_ms
+                return probed_ms
+        if cached > 0:
+            return cached
+        # 无探测结果时才退回 sidecar（可能略长于转场后的成品）
+        if sidecar_ms >= 200:
+            self._media_duration_cache[video_key] = sidecar_ms
+            return sidecar_ms
         return 0
 
     def _refresh_canva_timeline(self, video_path=""):
@@ -18936,8 +19040,12 @@ class DynamicCaptionPage(QWidget):
         self.extract_all_btn.setText("正在识别中…")
         self._start_timeline_activity(f"[{index}/{total}] {Path(source).name}",base,cap)
 
-    def _mark_captions_source_timed(self, key: str):
-        """新提取的字幕在源片时钟上；同时快照源轴，裁剪后始终从此重映射。"""
+    def _mark_captions_source_timed(self, key: str, *, product_clock: bool = False):
+        """写入识别结果的时钟标记，并快照源轴供后续裁剪重映射。
+
+        product_clock=True：识别对象已是合成成品/成片时钟（分组合成辅助分段），
+        工作副本直接对齐时间轴，避免再被当成「源片轴」去映射一次。
+        """
         if not key:
             return
         # 保存 ASR 原始时间轴（与后续工作副本分离）
@@ -18953,8 +19061,34 @@ class DynamicCaptionPage(QWidget):
             if not candidate:
                 continue
             state = dict(self.timeline_edit_states.get(candidate, {}) or {})
-            state["captions_timeline_aligned"] = False
+            state["captions_timeline_aligned"] = bool(product_clock)
             self.timeline_edit_states[candidate] = state
+
+    def _extracted_timeline_is_product_clock(self, key: str) -> bool:
+        """当前键是否已是分组合成成品时钟（直接对成品 ASR，无需再映射）。"""
+        if not key:
+            return False
+        state = dict(self.timeline_edit_states.get(key, {}) or {})
+        segs = list((state.get("tracks") or {}).get("video") or [])
+        if (
+            state.get("segmented")
+            and not state.get("user_edited")
+            and video_segments_are_product_clock_identity(segs)
+        ):
+            return True
+        try:
+            for path in getattr(self, "group_merge_outputs", []) or []:
+                if self._timeline_key(path) == key:
+                    return True
+        except Exception:
+            pass
+        try:
+            name = Path(key).name
+            if name.endswith("去口气音合成.mp4") or name.endswith("_去口气音合成.mp4"):
+                return True
+        except Exception:
+            pass
+        return False
 
     def _ensure_caption_source_snapshot(self, key: str):
         """若尚无源轴快照且当前仍是源时钟，则补快照（兼容旧工程）。"""
@@ -19308,7 +19442,10 @@ class DynamicCaptionPage(QWidget):
             if word_aligned:
                 self._caption_map_put(self.timeline_words, key, word_aligned)
             self._caption_map_put(self.timeline_overrides, key, phrase_srt)
-            self._mark_captions_source_timed(key)
+            # 合成成品上直接 ASR → 成片时钟；普通源片 → 源时钟（裁剪后再映射）
+            self._mark_captions_source_timed(
+                key, product_clock=self._extracted_timeline_is_product_clock(key),
+            )
             if chinese:
                 self._caption_map_put(self.timeline_chinese, key, chinese)
             if self.caption_mode.currentText() == "自由文案动画（不对口型）":
@@ -19331,7 +19468,12 @@ class DynamicCaptionPage(QWidget):
         return keys
 
     def _refresh_caption_preview_after_extract(self, source: str, phrase_srt: str):
-        """提取完成后强制刷新预览/编辑器，避免仍显示旧词轴（批量长视频常见）。"""
+        """提取完成后强制按成品真实时长重建时间轴+预览。
+
+        只 set_srt / max(duration) 不够：合成后音视频条可能仍是旧短时长，
+        字幕块却是成品真实时间 → 时间轴上看起来「对不上」，反复点重新提取
+        其实是在等播放器 duration 回调碰巧重建轨道。这里主动清缓存并 set_project。
+        """
         # 任意提取完成都清 live cache，防止串片/旧词轴
         self._live_timeline_cache_key = None
         source_key = self._timeline_key(source) if source else ""
@@ -19354,43 +19496,60 @@ class DynamicCaptionPage(QWidget):
             bound_ok = False
         if source_key not in (current_source_key, video_key, active_key) and not bound_ok:
             return
+        video_path = ""
+        try:
+            item = self.videos.currentItem() if hasattr(self, "videos") else None
+            video_path = item.text() if item else (active_video or source)
+        except Exception:
+            video_path = active_video or source
+        # 清掉可能串进来的旧时长，强制 ffprobe 再测一次
+        if video_path:
+            try:
+                self._media_duration_cache.pop(self._timeline_key(video_path), None)
+            except Exception:
+                pass
+            try:
+                probed = float(media_duration(self.find_ffmpeg(), video_path, fallback=0.0) or 0.0)
+                if probed > 0.05:
+                    self._media_duration_cache[self._timeline_key(video_path)] = max(
+                        1000, int(round(probed * 1000)),
+                    )
+            except Exception:
+                pass
         self._loading_timeline = True
         try:
             if _qt_widget_alive(getattr(self, "override_text", None)):
                 self.override_text.setPlainText(phrase_srt or "")
-            if hasattr(self, "canva_timeline") and hasattr(self.canva_timeline, "set_srt"):
+            if hasattr(self, "timeline_timestamp_view") and _qt_widget_alive(self.timeline_timestamp_view):
                 try:
-                    # 标尺对齐当前视频时长，避免短字幕轴把时间线缩短
-                    video_path = ""
+                    self.timeline_timestamp_view.blockSignals(True)
+                    self.timeline_timestamp_view.setPlainText(phrase_srt or "")
+                finally:
                     try:
-                        item = self.videos.currentItem() if hasattr(self, "videos") else None
-                        video_path = item.text() if item else (active_video or source)
+                        self.timeline_timestamp_view.blockSignals(False)
                     except Exception:
-                        video_path = active_video or source
-                    if video_path:
-                        try:
-                            dur_ms = int(self._resolve_timeline_duration_ms(str(video_path)) or 0)
-                        except Exception:
-                            dur_ms = 0
-                        if dur_ms <= 80:
-                            try:
-                                dur_ms = int(media_duration(self.find_ffmpeg(), video_path) * 1000)
-                            except Exception:
-                                dur_ms = 0
-                        if dur_ms > 80:
-                            canvas = getattr(self.canva_timeline, "canvas", None) or self.canva_timeline
-                            if hasattr(canvas, "media_source_duration_ms"):
-                                canvas.media_source_duration_ms = max(
-                                    int(getattr(canvas, "media_source_duration_ms", 0) or 0),
-                                    dur_ms,
-                                )
-                            if hasattr(canvas, "duration_ms"):
-                                canvas.duration_ms = max(int(getattr(canvas, "duration_ms", 0) or 0), dur_ms)
-                    self.canva_timeline.set_srt(phrase_srt or "")
-                except Exception:
-                    pass
+                        pass
         finally:
             self._loading_timeline = False
+        # 完整重建：音视频条 + 分段条 + 字幕块共用同一把成品标尺
+        if video_path and hasattr(self, "_refresh_canva_timeline"):
+            try:
+                self._refresh_canva_timeline(video_path)
+            except Exception as refresh_exc:
+                try:
+                    self._append_run_log(f"提取后重建时间轴警告：{refresh_exc}")
+                except Exception:
+                    pass
+                if hasattr(self, "canva_timeline") and hasattr(self.canva_timeline, "set_srt"):
+                    try:
+                        self.canva_timeline.set_srt(phrase_srt or "")
+                    except Exception:
+                        pass
+        elif hasattr(self, "canva_timeline") and hasattr(self.canva_timeline, "set_srt"):
+            try:
+                self.canva_timeline.set_srt(phrase_srt or "")
+            except Exception:
+                pass
         self._invalidate_preview_caption_overlay()
         self._refresh_live_preview()
 
@@ -20379,6 +20538,69 @@ class DynamicCaptionPage(QWidget):
         self._clear_previews_and_releases()
         try: ffmpeg = self.find_ffmpeg()
         except Exception as exc: QMessageBox.critical(self, "缺少组件", str(exc)); return
+
+        want_caps = self._export_wants_captions()
+        want_wm = self._export_wants_watermark()
+        has_wm_assets = bool(active_watermark_entries(getattr(self, "_watermark_entries", []) or []))
+        if want_wm and not has_wm_assets:
+            QMessageBox.information(
+                self, "没有可用水印",
+                "已勾选「加水印」，但公司水印库里没有启用的水印。\n"
+                "请先到「水印 / 蒙版」添加并勾选启用，或取消顶栏「加水印」。",
+            )
+            return
+        if not want_caps and not want_wm:
+            # 仍可导出（蒙版/重命名/转码），但提醒一下避免误点空转
+            reply = QMessageBox.question(
+                self, "导出选项",
+                "当前未勾选「烧录字幕」也未勾选「加水印」。\n"
+                "将只按画面/音轨/蒙版/重命名等设置导出。\n\n继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        if want_caps:
+            missing_timeline = 0
+            for path in videos:
+                key = self._timeline_key(path)
+                src = ""
+                try:
+                    src = self._caption_source_for_video(path)
+                except Exception:
+                    src = path
+                src_key = self._timeline_key(src) if src else key
+                has_tl = bool(
+                    str(self.timeline_words.get(key) or self.timeline_words.get(src_key) or "").strip()
+                    or str(self.timeline_overrides.get(key) or self.timeline_overrides.get(src_key) or "").strip()
+                    or _load_word_sidecar(path)
+                    or _load_word_sidecar(src)
+                )
+                if not has_tl:
+                    missing_timeline += 1
+            if missing_timeline > 0:
+                box = QMessageBox(self)
+                box.setWindowTitle("缺少字幕时间轴")
+                box.setIcon(QMessageBox.Icon.Question)
+                box.setText(
+                    f"队列中有 {missing_timeline}/{len(videos)} 个视频还没有字幕时间轴。\n\n"
+                    "「识别并烧录」会在导出时现场语音识别（本地 Whisper 可能很慢，看起来像卡住）。\n"
+                    "「不烧字幕继续」适合只加水印/蒙版/重命名的成品。\n"
+                    "「取消」返回后可先点「批量提取」。"
+                )
+                btn_asr = box.addButton("识别并烧录", QMessageBox.ButtonRole.AcceptRole)
+                btn_skip = box.addButton("不烧字幕继续", QMessageBox.ButtonRole.ActionRole)
+                btn_cancel = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                box.setDefaultButton(btn_skip)
+                box.exec()
+                clicked = box.clickedButton()
+                if clicked == btn_cancel:
+                    return
+                if clicked == btn_skip:
+                    if hasattr(self, "export_burn_captions"):
+                        self.export_burn_captions.setChecked(False)
+                    want_caps = False
+
         settings = self._settings_for_batch_export(); self.generated_records = []; self._batch_expected_count=len(videos)
         self._export_queue_snapshot = {self._timeline_key(path): _media_signature(path) for path in videos}
         # 只有 00_分组合成 中的全部中间视频都进入本次渲染队列，
@@ -20392,13 +20614,16 @@ class DynamicCaptionPage(QWidget):
         self.log.clear(); self.progress.setValue(0)
         self.log_status.setText("任务已开始；详细记录写入“帮助 → 软件日志”")
         self.log_status.setStyleSheet("color:#7dd3fc;font-size:11px;")
-        try:
-            if getattr(self, "_watermark_entries", None) or getattr(self, "_watermark_paths", None):
-                self._append_run_log(
-                    "批量导出不添加公司水印（水印仅在合成勾选「合成时启用水印」时烧录一次）。"
-                )
-        except Exception:
-            pass
+        stages = []
+        if want_caps:
+            stages.append("烧录字幕" + ("（缺轴将识别）" if settings.get("skip_captions") is False else ""))
+        else:
+            stages.append("不烧字幕")
+        if want_wm and has_wm_assets:
+            stages.append("加水印")
+        else:
+            stages.append("不加公司水印")
+        self._append_run_log("批量导出选项：" + "｜".join(stages) + f"｜共 {len(videos)} 个")
         self.thread = QThread(self)
         callback = lambda path: self.transcribe_callable(path, settings["provider"])
         self.worker = CaptionWorker(videos, audios, self.output.text(), ffmpeg, callback, settings)
