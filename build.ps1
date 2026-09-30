@@ -13,7 +13,7 @@ if ([string]::IsNullOrWhiteSpace($version)) {
   $versionFile = Join-Path $root 'VERSION'
   if (Test-Path $versionFile) { $version = (Get-Content -Raw -LiteralPath $versionFile).Trim() }
 }
-if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.67' }
+if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.68' }
 $version = $version.Trim().TrimStart('v')
 if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Invalid application version: $version" }
 $versionHook = Join-Path $env:TEMP ("video_toolkit_version_" + [guid]::NewGuid().ToString('N') + '.py')
@@ -42,7 +42,7 @@ python -m PyInstaller --clean --noconfirm --windowed --onedir --noupx --contents
   --add-binary ((Join-Path $mediaBin 'ffmpeg.exe') + ';.') `
   --add-binary ((Join-Path $mediaBin 'ffprobe.exe') + ';.') `
   --collect-data 'faster_whisper' `
-  --collect-binaries 'ctranslate2' `
+  --collect-all 'ctranslate2' `
   --collect-data 'onnxruntime' `
   --collect-binaries 'onnxruntime' `
   --collect-all 'charset_normalizer' `
@@ -74,3 +74,17 @@ python -m PyInstaller --clean --noconfirm --windowed --onedir --noupx --contents
   --workpath (Join-Path $root 'build') `
   --specpath $root `
   (Join-Path $root 'app.py')
+# Ensure ctranslate2/__init__.py sits next to native libs.
+# Empty package dir from collect-binaries shadowed PYZ and broke faster-whisper:
+# module 'ctranslate2' has no attribute 'StorageView'
+$ct2Dir = Join-Path $dist 'VideoToolkit\_internal\ctranslate2'
+$ct2Init = Join-Path $root 'tools\packaging\ctranslate2_frozen_init.py'
+if ((Test-Path -LiteralPath $ct2Dir) -and (Test-Path -LiteralPath $ct2Init)) {
+  Copy-Item -LiteralPath $ct2Init -Destination (Join-Path $ct2Dir '__init__.py') -Force
+  $verPy = Join-Path $ct2Dir 'version.py'
+  if (-not (Test-Path -LiteralPath $verPy)) {
+    Set-Content -LiteralPath $verPy -Value '__version__ = "bundled"' -Encoding UTF8
+  }
+  Write-Host 'ctranslate2 frozen package init ensured.'
+}
+

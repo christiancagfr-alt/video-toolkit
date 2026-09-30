@@ -79,7 +79,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.67").strip().lstrip("v") or "1.7.67"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.68").strip().lstrip("v") or "1.7.68"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 _SINGLE_INSTANCE_MUTEX = None
 ALL_RESULTS_LABEL = "【全部结果】"
@@ -1228,10 +1228,18 @@ class TranscribeWorker(QObject):
 
     def _local_whisper(self, audio: Path):
         try:
-            from faster_whisper import WhisperModel
             import ctranslate2
+            if not hasattr(ctranslate2, "StorageView"):
+                raise RuntimeError(
+                    "本地 Whisper 引擎不完整：ctranslate2 缺少 StorageView。"
+                    "常见原因是安装包未正确打入 ctranslate2（请升级到含此修复的版本，"
+                    "或在源码环境执行：pip install -U --force-reinstall ctranslate2 faster-whisper）。"
+                )
+            from faster_whisper import WhisperModel
         except ImportError as exc:
-            raise RuntimeError("缺少本地字幕组件，请运行：pip install faster-whisper") from exc
+            raise RuntimeError(
+                "缺少本地字幕组件，请运行：pip install -U faster-whisper ctranslate2"
+            ) from exc
         model_name = str(self.model or DEFAULT_MODELS[LOCAL_PROVIDER]).strip() or "medium"
         # 兼容界面展示名
         for code, label in LOCAL_WHISPER_MODEL_OPTIONS:

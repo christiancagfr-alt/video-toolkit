@@ -8,7 +8,7 @@ if [[ -z "$APP_VERSION" ]]; then
   APP_VERSION="$(git -C "$ROOT_DIR" describe --tags --abbrev=0 2>/dev/null || true)"
 fi
 APP_VERSION="${APP_VERSION#v}"
-APP_VERSION="${APP_VERSION:-1.7.67}"
+APP_VERSION="${APP_VERSION:-1.7.68}"
 if [[ ! "$APP_VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
   echo "Invalid application version: $APP_VERSION" >&2
   exit 1
@@ -38,7 +38,7 @@ python -m PyInstaller \
   --add-binary "$MEDIA_BIN/ffmpeg:." \
   --add-binary "$MEDIA_BIN/ffprobe:." \
   --collect-data faster_whisper \
-  --collect-binaries ctranslate2 \
+  --collect-all ctranslate2 \
   --collect-data onnxruntime \
   --collect-binaries onnxruntime \
   --hidden-import faster_whisper \
@@ -63,3 +63,14 @@ python -m PyInstaller \
   --workpath "$ROOT_DIR/build_macos" \
   --specpath "$ROOT_DIR" \
   "$ROOT_DIR/app.py"
+
+# Ensure ctranslate2 package init next to native libs (StorageView for faster-whisper)
+INIT_SRC="$ROOT_DIR/tools/packaging/ctranslate2_frozen_init.py"
+while IFS= read -r -d '' ct2_dir; do
+  if [[ -f "$INIT_SRC" ]]; then
+    cp -f "$INIT_SRC" "$ct2_dir/__init__.py"
+    [[ -f "$ct2_dir/version.py" ]] || printf '%s\n' '__version__ = "bundled"' > "$ct2_dir/version.py"
+    echo "ctranslate2 frozen package init ensured at $ct2_dir"
+  fi
+done < <(find "$ROOT_DIR" -type d -name ctranslate2 \( -path '*/_internal/ctranslate2' -o -path '*/Contents/Frameworks/ctranslate2' \) 2>/dev/null | tr '\n' '\0')
+
