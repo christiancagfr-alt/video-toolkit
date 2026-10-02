@@ -3,21 +3,17 @@ requests>=2.31,<3
 chardet>=5,<6
 # 3.4.x Cython/mypyc 扩展在 PyInstaller+UPX 下易启动失败；打包已禁用 UPX 并 collect-all
 charset-normalizer>=3.3,<4
-# Pillow 12.3+ closes multiple 2026 image-bomb / OOB advisories (pip-audit)
 Pillow>=12.3,<13
 pillow-heif>=0.18,<2
 opencv-python>=4.10,<5
-# yt-dlp calendar versions: 2026.7.4+ covers CVE-2026-50019/50023/50574/55404 family
 yt-dlp>=2026.7.4
 scenedetect[opencv]>=0.6,<1
-# moviepy removed: unused in app code and pins Pillow<12, blocking security upgrades
+# moviepy unused in app; omitted to avoid Pillow pin conflicts
 faster-whisper>=1.1,<2
 onnxruntime>=1.20,<2
-# PYSEC-2022-252 was a historical PyPI account takeover; pin current line and prefer hashes in CI
 deep-translator>=1.11.4,<2
 google-api-python-client>=2,<3
 google-auth>=2,<3
 google-auth-oauthlib>=1,<2
 edge-tts>=7,<8
-# cryptography 48+ / 49+ / 50+ required for PYSEC-2026-3552/3553/3554 + GHSA-537c-gmf6-5ccf
 cryptography>=48,<51

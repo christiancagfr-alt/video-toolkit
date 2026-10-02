@@ -170,6 +170,13 @@ jobs:
       ARCH: x64
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      - name: Validate release tag
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9A-Za-z._-]*|[0-9A-Za-z._-]*) ;;
+            *) echo "Invalid tag: $RELEASE_TAG"; exit 1 ;;
+          esac
+
       - name: Checkout tag
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

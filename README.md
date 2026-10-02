@@ -4,14 +4,13 @@
 
 当前版本：**v1.7.71**
 
-功能总览见 [`docs/FEATURES.md`](docs/FEATURES.md)；安全审核见 [`docs/SECURITY_AUDIT_v1.7.71.md`](docs/SECURITY_AUDIT_v1.7.71.md)。
+功能总览见 [`docs/FEATURES.md`](docs/FEATURES.md)。
 
-### v1.7.71 · 2026-10-01
+### v1.7.71 · 2026-10-02
 
-- **安全加固**：更新安装去掉 `shell=True`；默认禁用第三方 GitHub 镜像（可选手动开启）；yt-dlp 恢复 TLS 校验；截图链接域名白名单；Gladia/Gemini 回调 host 校验。
-- **依赖**：Pillow ≥12.3、cryptography ≥48、yt-dlp ≥2026.7.4；移除未使用的 moviepy（解除 Pillow&lt;12 阻塞）。
-- **CI**：Actions 钉 commit SHA；workflow tag 防脚本注入；最小权限。
-- **仓库**：扩展 `.gitignore`；新增 `.env.example` 与安全/功能文档。
+- **检查更新**：发布源改为个人仓库 `christiancagfr-alt/video-toolkit`；顶栏可选「更新走镜像」。
+- **安装向导**：简体中文界面；修复安装完成页文案乱码。
+- **稳定性**：更新安装与下载提示汉化；组件清单空状态提示更清晰。
 
 ### v1.7.69 · 2026-10-01
 

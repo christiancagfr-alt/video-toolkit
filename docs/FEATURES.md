@@ -24,14 +24,13 @@
 - **导出独立选项**：顶栏「烧录字幕」「加水印」控制批量导出，与「分组合成」勾选解耦；成品可只加水印或只烧字幕。
 - **辅助工具**：字幕审计、富文本/关键词样式、双语对齐、相似素材分组、FCPXML 导出。
 
-## 安全相关行为（用户可见）
+## 使用提示
 
-- API 密钥存本机加密库（Windows：DPAPI + Fernet），不写进 `config.json` 明文。
+- API 密钥保存在本机，不写进明文配置文件。
 - 「检查更新」从个人仓库 `christiancagfr-alt/video-toolkit` 发布页拉取；默认不走第三方镜像，需要时再勾选「更新走镜像」。
-- 网络截图 / 识别链接仅允许 YouTube、Facebook、Instagram、TikTok。
+- 网络截图 / 识别链接支持 YouTube、Facebook、Instagram、TikTok。
 
 ## 构建与发布
 
-- Windows：`build.ps1` + Inno Setup `VideoToolkit.iss`
+- Windows：`build.ps1` + Inno Setup `VideoToolkit.iss`（简体中文向导）
 - macOS / Linux：`build_macos.sh` / `build_linux.sh` 或 fork Actions
-- 详细安全结论见 `docs/SECURITY_AUDIT_v1.7.70.md`

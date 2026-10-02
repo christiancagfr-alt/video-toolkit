@@ -59,3 +59,7 @@ _smoke_*/
 backup_*/
 *.bak
 VideoToolkit_Setup_*.exe
+
+docs/private/
+*.SECURITY_AUDIT*.md
+
