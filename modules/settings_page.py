@@ -929,7 +929,7 @@ class SettingsPage(QWidget):
                 seen.add(key)
                 unique.append(p)
         if not unique:
-            QMessageBox.information(self, "没有包", "清单为空。")
+            QMessageBox.information(self, "组件清单为空", "当前没有可安装或可更新的组件条目。")
             return
         n = len(unique)
         # 若刚检查过更新，优先只升可更新的（更快）；否则升全部

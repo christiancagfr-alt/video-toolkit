@@ -86,8 +86,12 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.70").strip().lstrip("v") or "1.7.70"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.71").strip().lstrip("v") or "1.7.71"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
+# 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
+UPDATE_REPO = "christiancagfr-alt/video-toolkit"
+UPDATE_API_LATEST = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+UPDATE_RELEASES_PAGE = f"https://github.com/{UPDATE_REPO}/releases/latest"
 _SINGLE_INSTANCE_MUTEX = None
 ALL_RESULTS_LABEL = "【全部结果】"
 ASR_PROVIDERS = ["Groq", "Gemini", "ElevenLabs", "Gladia"]
@@ -3399,7 +3403,7 @@ class UpdateCheckWorker(QObject):
                 "Accept": "application/vnd.github+json",
             }
             response = requests.get(
-                "https://api.github.com/repos/secure-artifacts/video-toolkit/releases/latest",
+                UPDATE_API_LATEST,
                 headers=headers,
                 timeout=15,
             )
@@ -3407,7 +3411,8 @@ class UpdateCheckWorker(QObject):
                 body = (response.text or "")[:180].replace("\n", " ")
                 self.finished.emit(
                     False, "", "", "",
-                    f"GitHub 返回 HTTP {response.status_code}" + (f"：{body}" if body else ""),
+                    f"更新服务器返回错误（状态码 {response.status_code}）"
+                    + (f"：{body}" if body else ""),
                 )
                 return
 
@@ -3416,10 +3421,10 @@ class UpdateCheckWorker(QObject):
             try:
                 latest_version = _sanitize_release_version(tag_name)
             except ValueError as exc:
-                self.finished.emit(False, "", "", "", str(exc))
+                self.finished.emit(False, "", "", "", f"版本号无效：{exc}")
                 return
             if not latest_version:
-                self.finished.emit(False, "", "", "", "无法从 GitHub 获取最新版本号")
+                self.finished.emit(False, "", "", "", "无法获取最新版本号，请稍后重试或打开发布页手动查看")
                 return
 
             has_new = _parse_version_parts(latest_version) > _parse_version_parts(self.current_version)
@@ -3440,13 +3445,16 @@ class UpdateCheckWorker(QObject):
                 self.finished.emit(
                     True, latest_version, "", "",
                     f"发现新版本 v{latest_version}，但未找到当前系统可用的安装包。\n"
-                    "请到 GitHub Releases 页面手动下载。",
+                    f"请打开发布页手动下载：\n{UPDATE_RELEASES_PAGE}",
                 )
                 return
 
             self.finished.emit(True, latest_version, download_url, filename, "")
         except Exception as exc:
-            self.finished.emit(False, "", "", "", f"{type(exc).__name__}: {exc}")
+            self.finished.emit(
+                False, "", "", "",
+                f"检查更新失败：{exc}",
+            )
 
 
 class DownloadWorker(QObject):
@@ -3471,7 +3479,7 @@ class DownloadWorker(QObject):
                 self.finished.emit(False, "", "下载地址为空")
                 return
             if not is_allowed_github_asset_url(self.url):
-                self.finished.emit(False, "", "下载地址不是官方 GitHub Release 资源，已拒绝")
+                self.finished.emit(False, "", "下载地址不是本软件发布页的正式资源，已拒绝")
                 return
 
             try:
@@ -3500,7 +3508,7 @@ class DownloadWorker(QObject):
             last_error = ""
             candidates = _github_download_candidates(self.url, use_mirrors=self.use_mirrors)
             if not candidates:
-                self.finished.emit(False, "", "没有可用的官方下载地址")
+                self.finished.emit(False, "", "没有可用的正式下载地址")
                 return
             for attempt, candidate in enumerate(candidates, 1):
                 if self.cancelled:
@@ -3519,7 +3527,8 @@ class DownloadWorker(QObject):
                         # when mirrors are off; mirror hosts are intentional when opted in.
                         final_url = str(getattr(response, "url", "") or candidate)
                         if not self.use_mirrors and not is_allowed_github_asset_url(final_url):
-                            raise RuntimeError(f"重定向到非官方主机，已中止：{urlparse(final_url).hostname}")
+                            host = urlparse(final_url).hostname or "未知"
+                            raise RuntimeError(f"下载被重定向到非发布页主机（{host}），已中止")
                         total = int(response.headers.get("content-length", 0) or 0)
                         downloaded = 0
                         with open(dest, "wb") as handle:
@@ -3550,12 +3559,12 @@ class DownloadWorker(QObject):
                             with open(dest, "rb") as probe:
                                 magic = probe.read(2)
                             if magic != b"MZ":
-                                raise RuntimeError("安装包不是有效的 Windows PE（缺少 MZ 头），已丢弃")
+                                raise RuntimeError("安装包文件损坏或不是 Windows 安装程序，已丢弃")
                         self.progress.emit(100)
                         self.finished.emit(True, str(dest), "")
                         return
                 except Exception as exc:
-                    last_error = f"{type(exc).__name__}: {exc}"
+                    last_error = str(exc)
                     try:
                         if dest.exists():
                             dest.unlink(missing_ok=True)
@@ -3564,15 +3573,14 @@ class DownloadWorker(QObject):
                     continue
 
             tip = (
-                f"下载失败（已尝试{'官方与镜像' if self.use_mirrors else '官方'}通道）。\n"
+                f"下载失败（已尝试{'正式源与镜像' if self.use_mirrors else '正式发布源'}）。\n"
                 f"{last_error or '未知错误'}\n\n"
-                "可到 GitHub Releases 页面用浏览器手动下载：\n"
-                "https://github.com/secure-artifacts/video-toolkit/releases/latest\n"
-                "若 GitHub 较慢，可勾选顶栏「更新走镜像」后再试。"
+                f"请用浏览器打开发布页手动下载：\n{UPDATE_RELEASES_PAGE}\n"
+                "若访问较慢，可勾选顶栏「更新走镜像」后再试。"
             )
             self.finished.emit(False, "", tip)
         except Exception as exc:
-            self.finished.emit(False, "", f"{type(exc).__name__}: {exc}")
+            self.finished.emit(False, "", f"下载失败：{exc}")
 
 
 class MainWindow(QMainWindow):
@@ -3661,14 +3669,16 @@ class MainWindow(QMainWindow):
         # 帮助右侧：检查更新 → 查看软件日志（均不参与页面切换）
         self.update_btn = QPushButton("检查更新")
         self.update_btn.setObjectName("updateNavButton")
-        self.update_btn.setToolTip("检查是否有新版本；启动后也会在后台静默检查")
+        self.update_btn.setToolTip(
+            f"检查是否有新版本（发布源：{UPDATE_REPO}）；启动后也会在后台静默检查"
+        )
         self.update_btn.clicked.connect(lambda: self._check_update(manual=True))
         nav_layout.addWidget(self.update_btn)
 
         self.update_mirror_chk = QCheckBox("更新走镜像")
         self.update_mirror_chk.setObjectName("updateMirrorCheck")
         self.update_mirror_chk.setToolTip(
-            "默认关闭。仅在访问 GitHub 很慢时勾选；镜像站不在官方供应链内，有被替换安装包的风险。"
+            "默认关闭。仅在访问发布页很慢时勾选；镜像站不在本软件正式发布链内，有被替换安装包的风险。"
         )
         try:
             mirrors_on = bool((self.store.data.get("updater") or {}).get("use_github_mirrors"))
@@ -6783,12 +6793,13 @@ class MainWindow(QMainWindow):
                     error_text = ""
                 else:
                     error_text = (
-                        f"更新检查结果异常，请重试或到 GitHub Releases 手动下载。\n（内部信息：{error_text}）"
+                        f"更新检查结果异常，请重试或打开发布页手动下载。\n"
+                        f"发布页：{UPDATE_RELEASES_PAGE}\n（内部信息：{error_text}）"
                     )
 
         if error_text:
             if manual:
-                QMessageBox.warning(self, "检查更新失败", f"检测失败，错误原因：\n{error_text}")
+                QMessageBox.warning(self, "检查更新失败", f"检测失败，原因：\n{error_text}")
             return
 
         if has_new:
@@ -6797,7 +6808,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(
                         self, "检查更新",
                         f"发现新版本 v{latest_version}，但没有可用的下载地址。\n"
-                        "请到 GitHub Releases 页面手动下载。",
+                        f"请打开发布页手动下载：\n{UPDATE_RELEASES_PAGE}",
                     )
                 return
             package = str(filename or Path(str(download_url).split("?")[0]).name or "安装包")
@@ -6806,7 +6817,7 @@ class MainWindow(QMainWindow):
                 f"发现新版本 v{latest_version}（当前版本 v{APP_VERSION}）。\n"
                 f"安装包：{package}\n\n"
                 + ("是否立即下载并运行升级安装程序？" if is_setup else
-                   "是否立即下载绿色免安装包？（下载后请解压覆盖使用）")
+                   "是否立即下载绿色免安装压缩包？（下载后请解压覆盖使用）")
             )
             reply = QMessageBox.question(
                 self, "检测到新版本", prompt,
@@ -6862,10 +6873,13 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self, "开始下载",
-            "最新版更新包已在后台开始静默下载。下载期间您可以继续正常使用软件，下载完成后将会自动提示您安装。")
+            "最新版更新包已在后台开始下载。下载期间您可以继续使用软件，完成后会提示您安装。")
 
         if not str(url or "").strip():
-            QMessageBox.warning(self, "无法下载", "下载地址为空，请到 GitHub Releases 手动下载。")
+            QMessageBox.warning(
+                self, "无法下载",
+                f"下载地址为空，请打开发布页手动下载：\n{UPDATE_RELEASES_PAGE}",
+            )
             return
 
         self._download_thread = QThread(self)
@@ -6904,10 +6918,10 @@ class MainWindow(QMainWindow):
                         # Never shell=True: path/version must not hit cmd metacharacters.
                         path = str(Path(file_path).resolve())
                         if not path.lower().endswith(".exe"):
-                            raise RuntimeError("安装包扩展名异常")
+                            raise RuntimeError("安装包扩展名不正确")
                         with open(path, "rb") as probe:
                             if probe.read(2) != b"MZ":
-                                raise RuntimeError("安装包不是有效的 Windows PE")
+                                raise RuntimeError("安装包文件损坏或不是 Windows 安装程序")
                         if sys.platform.startswith("win"):
                             os.startfile(path)  # type: ignore[attr-defined]
                         else:
@@ -6916,11 +6930,11 @@ class MainWindow(QMainWindow):
                     except Exception as e:
                         QMessageBox.warning(
                             self, "运行安装包失败",
-                            f"启动升级安装程序失败，请手动打开文件安装：\n{file_path}\n错误信息: {e}")
+                            f"启动升级安装程序失败，请手动打开文件安装：\n{file_path}\n原因：{e}")
             else:
                 QMessageBox.information(
                     self, "绿色免安装版下载完成",
-                    f"最新版本的绿色免安装压缩包已在后台下载完成！\n\n存储路径：\n{file_path}\n\n请解压该文件后使用新版。"
+                    f"最新版本的绿色免安装压缩包已下载完成！\n\n存储路径：\n{file_path}\n\n请解压后使用新版。"
                 )
                 try:
                     import os
@@ -6932,15 +6946,15 @@ class MainWindow(QMainWindow):
                 getattr(self, "_download_worker", None)
                 and self._download_worker.cancelled)
             if not is_cancelled:
-                releases = "https://github.com/secure-artifacts/video-toolkit/releases/latest"
+                releases = UPDATE_RELEASES_PAGE
                 box = QMessageBox(self)
                 box.setIcon(QMessageBox.Icon.Warning)
                 box.setWindowTitle("下载失败")
                 box.setText("后台下载升级安装包失败。")
                 box.setInformativeText(
-                    f"{error}\n\n若网络访问 GitHub 不稳定，请用浏览器打开 Releases 手动下载。"
+                    f"{error}\n\n若网络访问不稳定，请用浏览器打开发布页手动下载。"
                 )
-                open_btn = box.addButton("打开下载页", QMessageBox.ButtonRole.AcceptRole)
+                open_btn = box.addButton("打开发布页", QMessageBox.ButtonRole.AcceptRole)
                 box.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
                 box.exec()
                 if box.clickedButton() is open_btn:

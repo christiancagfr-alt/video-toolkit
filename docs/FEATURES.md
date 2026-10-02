@@ -27,7 +27,7 @@
 ## 安全相关行为（用户可见）
 
 - API 密钥存本机加密库（Windows：DPAPI + Fernet），不写进 `config.json` 明文。
-- 「检查更新」默认只从官方 GitHub Releases 下载；需要时再勾选「更新走镜像」。
+- 「检查更新」从个人仓库 `christiancagfr-alt/video-toolkit` 发布页拉取；默认不走第三方镜像，需要时再勾选「更新走镜像」。
 - 网络截图 / 识别链接仅允许 YouTube、Facebook、Instagram、TikTok。
 
 ## 构建与发布
