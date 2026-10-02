@@ -119,14 +119,19 @@ def ytdlp_status() -> tuple[bool, str]:
     return False, "缺少：yt-dlp（模块或独立程序）"
 
 
-def ytdlp_download_urls() -> list[str]:
-    """Primary + fallbacks (GitHub may be slow in CN)."""
+def ytdlp_download_urls(*, use_mirrors: bool = False) -> list[str]:
+    """Official GitHub asset first; optional third-party mirrors (off by default)."""
     asset = ytdlp_asset_name()
-    return [
-        f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}",
-        f"https://ghproxy.net/https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}",
-        f"https://mirror.ghproxy.com/https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}",
-    ]
+    official = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
+    urls = [official]
+    if use_mirrors:
+        urls.extend(
+            [
+                f"https://ghproxy.net/{official}",
+                f"https://mirror.ghproxy.com/{official}",
+            ]
+        )
+    return urls
 
 
 def install_ytdlp_binary(
@@ -378,7 +383,7 @@ def download_media(
             "format": format_spec,
             "quiet": quiet,
             "no_warnings": no_warnings,
-            "nocheckcertificate": True,
+            "nocheckcertificate": False,
             "noplaylist": True,
             "overwrites": True,
         }
@@ -426,7 +431,6 @@ def download_media(
         "--force-overwrites",
         "-f", format_spec,
         "-o", outtmpl,
-        "--no-check-certificates",
         "--newline",
         "--retries", "5",
         # 与模块侧一致的客户端回退

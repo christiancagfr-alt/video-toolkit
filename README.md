@@ -2,7 +2,16 @@
 
 一站式桌面视频工作台，将批量截图、智能剪辑、Reels 编辑、批量重命名、元数据清理、字幕提取和自动上传填表集中在同一个 PySide6 界面中。
 
-当前版本：**v1.7.69**
+当前版本：**v1.7.70**
+
+功能总览见 [`docs/FEATURES.md`](docs/FEATURES.md)；安全审核见 [`docs/SECURITY_AUDIT_v1.7.70.md`](docs/SECURITY_AUDIT_v1.7.70.md)。
+
+### v1.7.70 · 2026-10-01
+
+- **安全加固**：更新安装去掉 `shell=True`；默认禁用第三方 GitHub 镜像（可选手动开启）；yt-dlp 恢复 TLS 校验；截图链接域名白名单；Gladia/Gemini 回调 host 校验。
+- **依赖**：Pillow ≥12.3、cryptography ≥48、yt-dlp ≥2026.7.4；移除未使用的 moviepy（解除 Pillow&lt;12 阻塞）。
+- **CI**：Actions 钉 commit SHA；workflow tag 防脚本注入；最小权限。
+- **仓库**：扩展 `.gitignore`；新增 `.env.example` 与安全/功能文档。
 
 ### v1.7.69 · 2026-10-01
 

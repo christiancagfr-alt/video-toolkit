@@ -20,24 +20,32 @@ on:
           - both
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build-macos-arm64:
     if: ${{ inputs.arches == 'arm64' || inputs.arches == 'both' }}
     runs-on: macos-latest
+    permissions:
+      contents: write
     env:
       ARCH: arm64
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      - name: Validate release tag
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9A-Za-z._-]*|[0-9A-Za-z._-]*) ;;
+            *) echo "Invalid tag: $RELEASE_TAG"; exit 1 ;;
+          esac
+
       - name: Checkout tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -69,11 +77,10 @@ jobs:
 
       - name: Embed version from tag
         run: |
-          TAG="${{ inputs.tag }}"
-          VERSION="${TAG#v}"
+          VERSION="${RELEASE_TAG#v}"
           echo "VIDEO_TOOLKIT_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "$VERSION" > VERSION
-          echo "Building macOS $ARCH for $TAG ($VERSION)"
+          echo "Building macOS $ARCH for $RELEASE_TAG ($VERSION)"
 
       - name: Build macOS application
         run: |
@@ -114,14 +121,14 @@ jobs:
       - name: Package final artifact
         run: |
           mkdir -p dist_final
-          TAG="${{ inputs.tag }}"
+          TAG="$RELEASE_TAG"
           ditto -c -k --sequesterRsrc --keepParent \
             "dist_macos/视频工具合集.app" \
             "dist_final/video-toolkit-macos-${ARCH}-${TAG}.zip"
           ls -lh dist_final/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: video-toolkit-macos-arm64
           path: dist_final/*.zip
@@ -131,7 +138,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ inputs.tag }}"
+          TAG="$RELEASE_TAG"
           # 与 tag 的 Build and Release 并行时，Release 可能尚未创建
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG not found yet; creating release shell..."
@@ -157,16 +164,19 @@ jobs:
   build-macos-x64:
     if: ${{ inputs.arches == 'x64' || inputs.arches == 'both' }}
     runs-on: macos-15-intel
+    permissions:
+      contents: write
     env:
       ARCH: x64
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - name: Checkout tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -198,11 +208,10 @@ jobs:
 
       - name: Embed version from tag
         run: |
-          TAG="${{ inputs.tag }}"
-          VERSION="${TAG#v}"
+          VERSION="${RELEASE_TAG#v}"
           echo "VIDEO_TOOLKIT_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "$VERSION" > VERSION
-          echo "Building macOS $ARCH for $TAG ($VERSION)"
+          echo "Building macOS $ARCH for $RELEASE_TAG ($VERSION)"
 
       - name: Build macOS application
         run: |
@@ -243,14 +252,14 @@ jobs:
       - name: Package final artifact
         run: |
           mkdir -p dist_final
-          TAG="${{ inputs.tag }}"
+          TAG="$RELEASE_TAG"
           ditto -c -k --sequesterRsrc --keepParent \
             "dist_macos/视频工具合集.app" \
             "dist_final/video-toolkit-macos-${ARCH}-${TAG}.zip"
           ls -lh dist_final/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: video-toolkit-macos-x64
           path: dist_final/*.zip
@@ -260,7 +269,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ inputs.tag }}"
+          TAG="$RELEASE_TAG"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG not found yet; creating release shell..."
             gh release create "$TAG" --title "$TAG" --notes "Release $TAG" --verify-tag || true

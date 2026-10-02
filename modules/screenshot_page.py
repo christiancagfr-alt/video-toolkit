@@ -139,9 +139,17 @@ class ProcessThread(QThread):
                     temp_video = url
                     self.log_signal.emit(f"  路径：{url}")
                 else:
+                    from .url_policy import is_supported_video_url
+                    if not is_supported_video_url(url):
+                        raise ValueError(
+                            "不支持的链接（仅 YouTube / Facebook / Instagram / TikTok 的 http/https）"
+                        )
                     self.log_signal.emit("  正在用 yt-dlp 解析并下载…")
                     from .ytdlp_utils import download_media
-                    outtmpl = f'temp_{int(time.time())}_{task_no}.%(ext)s'
+                    from .platform_utils import app_data_dir
+                    temp_root = app_data_dir() / "screenshot_tmp"
+                    temp_root.mkdir(parents=True, exist_ok=True)
+                    outtmpl = str(temp_root / f"temp_{int(time.time())}_{task_no}.%(ext)s")
                     temp_video, info = download_media(
                         url,
                         outtmpl,

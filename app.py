@@ -70,6 +70,13 @@ from modules.platform_utils import (
 from modules.path_picker import default_output_path
 from modules.app_logging import app_log_path, read_app_log, write_app_log
 from modules import elevenlabs_web_auth as el_web
+from modules.url_policy import (
+    GITHUB_MIRROR_PREFIXES,
+    SUPPORTED_VIDEO_DOMAINS,
+    allow_https_host,
+    is_allowed_github_asset_url,
+    is_supported_video_url,
+)
 from modules.help_content import FAQ_JUMP, HELP_CSS, HELP_FAQ_TAB_INDEX, HELP_TABS, SETTINGS_NAV
 from modules.language_style import (
     fill_writing_language_combo, import_language_pack_file, reload_language_packs,
@@ -79,7 +86,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.69").strip().lstrip("v") or "1.7.69"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.70").strip().lstrip("v") or "1.7.70"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 _SINGLE_INSTANCE_MUTEX = None
 ALL_RESULTS_LABEL = "【全部结果】"
@@ -228,6 +235,10 @@ class ConfigStore:
                 "auth_ok": False, "auth_identity": "", "auth_checked": "",
                 "variable_fields": [dict(item) for item in DEFAULT_VARIABLE_FIELDS],
                 "mapping_ui_version": 3,
+            },
+            # Security / updater preferences (mirrors off by default — supply-chain risk)
+            "updater": {
+                "use_github_mirrors": False,
             },
         }
 
@@ -758,25 +769,10 @@ def clean_model_srt(text: str, language=None) -> str:
     return filter_asr_junk_srt(text.strip() + "\n")
 
 
-SUPPORTED_VIDEO_DOMAINS = (
-    "youtube.com", "youtu.be", "facebook.com", "fb.watch",
-    "instagram.com", "tiktok.com",
-)
 MEDIA_EXTENSIONS = {
     ".mp4", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".m4v", ".ts",
     ".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".wma",
 }
-
-
-def is_supported_video_url(value: str) -> bool:
-    try:
-        parsed = urlparse(value.strip())
-        host = (parsed.hostname or "").lower()
-        return parsed.scheme in ("http", "https") and any(
-            host == domain or host.endswith("." + domain) for domain in SUPPORTED_VIDEO_DOMAINS
-        )
-    except Exception:
-        return False
 
 
 def natural_path_key(value: str):
@@ -1775,6 +1771,13 @@ class TranscribeWorker(QObject):
         upload_url = start.headers.get("x-goog-upload-url")
         if not upload_url:
             raise ApiFailure("Gemini 未返回上传地址")
+        try:
+            upload_url = allow_https_host(
+                upload_url,
+                {"generativelanguage.googleapis.com", "googleapis.com"},
+            )
+        except ValueError as exc:
+            raise ApiFailure(str(exc)) from exc
         self.log.emit("上传音频到 Gemini Files API …")
         with audio.open("rb") as handle:
             uploaded = requests.post(upload_url, headers={
@@ -1954,6 +1957,10 @@ class TranscribeWorker(QObject):
         result_url = str(job.get("result_url") or "").strip()
         if not result_url and job_id:
             result_url = f"https://api.gladia.io/v2/transcription/{job_id}"
+        try:
+            result_url = allow_https_host(result_url, {"api.gladia.io", "gladia.io"})
+        except ValueError as exc:
+            raise ApiFailure(str(exc)) from exc
         self.log.emit(f"Gladia 任务已提交：{job_id}")
         for _ in range(720):
             if self.cancelled:
@@ -1961,7 +1968,10 @@ class TranscribeWorker(QObject):
             result = requests.get(result_url, headers=headers, timeout=30)
             if result.status_code == 404 and job_id and "/transcription/" in result_url:
                 # 兼容旧账号仍用 pre-recorded 路径
-                result_url = f"https://api.gladia.io/v2/pre-recorded/{job_id}"
+                result_url = allow_https_host(
+                    f"https://api.gladia.io/v2/pre-recorded/{job_id}",
+                    {"api.gladia.io", "gladia.io"},
+                )
                 result = requests.get(result_url, headers=headers, timeout=30)
             if result.status_code >= 300:
                 raise ApiFailure(response_error(result), result.status_code)
@@ -3346,22 +3356,26 @@ def _select_release_asset(assets, *, is_win=True, is_mac=False, machine=""):
     return str(best.get("browser_download_url") or ""), str(best.get("name") or "")
 
 
-def _github_download_candidates(url: str) -> list[str]:
-    """Official URL first, then common release proxies (helps when GitHub CDN is blocked)."""
+def _github_download_candidates(url: str, *, use_mirrors: bool = False) -> list[str]:
+    """Official GitHub asset URL first; optional third-party mirrors (off by default)."""
     url = str(url or "").strip()
-    if not url:
+    if not url or not is_allowed_github_asset_url(url):
         return []
     candidates = [url]
-    if url.startswith("https://github.com/") or url.startswith("https://objects.githubusercontent.com/"):
-        for prefix in (
-            "https://ghproxy.net/",
-            "https://gh.llkk.cc/",
-            "https://mirror.ghproxy.com/",
-        ):
+    if use_mirrors:
+        for prefix in GITHUB_MIRROR_PREFIXES:
             proxied = prefix + url
             if proxied not in candidates:
                 candidates.append(proxied)
     return candidates
+
+
+def _sanitize_release_version(value: str) -> str:
+    text = str(value or "").strip().lstrip("vV")
+    safe = re.sub(r"[^0-9A-Za-z._-]+", "_", text)[:64]
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._-]{0,63}", safe or ""):
+        raise ValueError(f"非法版本号：{value!r}")
+    return safe
 
 
 class UpdateCheckWorker(QObject):
@@ -3399,7 +3413,11 @@ class UpdateCheckWorker(QObject):
 
             data = response.json()
             tag_name = str(data.get("tag_name") or "").strip()
-            latest_version = tag_name.lstrip("vV")
+            try:
+                latest_version = _sanitize_release_version(tag_name)
+            except ValueError as exc:
+                self.finished.emit(False, "", "", "", str(exc))
+                return
             if not latest_version:
                 self.finished.emit(False, "", "", "", "无法从 GitHub 获取最新版本号")
                 return
@@ -3435,11 +3453,12 @@ class DownloadWorker(QObject):
     progress = Signal(int)
     finished = Signal(bool, str, str)  # success, file_path, error
 
-    def __init__(self, url, version, filename=""):
+    def __init__(self, url, version, filename="", *, use_mirrors: bool = False):
         super().__init__()
         self.url = url
         self.version = version
         self.filename = filename
+        self.use_mirrors = bool(use_mirrors)
         self.cancelled = False
 
     def run(self):
@@ -3451,23 +3470,39 @@ class DownloadWorker(QObject):
             if not str(self.url or "").strip():
                 self.finished.emit(False, "", "下载地址为空")
                 return
+            if not is_allowed_github_asset_url(self.url):
+                self.finished.emit(False, "", "下载地址不是官方 GitHub Release 资源，已拒绝")
+                return
+
+            try:
+                safe_ver = _sanitize_release_version(self.version)
+            except ValueError as exc:
+                self.finished.emit(False, "", str(exc))
+                return
 
             ext = ".exe"
             if self.filename:
-                ext = Path(self.filename).suffix or ext
+                raw_ext = Path(self.filename).suffix or ext
             else:
                 url_path = self.url.split("?")[0]
-                if url_path.lower().endswith(".zip"):
-                    ext = ".zip"
-            dest = Path(tempfile.gettempdir()) / f"VideoToolkit_v{self.version}{ext}"
+                raw_ext = ".zip" if url_path.lower().endswith(".zip") else ext
+            ext = "." + re.sub(r"[^A-Za-z0-9]", "", str(raw_ext).lstrip("."))[:8] or ".exe"
+            if ext.lower() not in (".exe", ".zip", ".dmg", ".pkg", ".msi"):
+                self.finished.emit(False, "", f"不支持的更新包扩展名：{ext}")
+                return
+            dest = Path(tempfile.gettempdir()) / f"VideoToolkit_v{safe_ver}{ext}"
             headers = {
-                "User-Agent": f"VideoToolkit-Updater/{self.version or APP_VERSION}",
+                "User-Agent": f"VideoToolkit-Updater/{safe_ver or APP_VERSION}",
                 "Accept": "*/*",
             }
-            # connect 15s；单次读块 180s（大安装包/弱网）；官方失败再试镜像
+            # connect 15s；单次读块 180s；默认仅官方；勾选后才试镜像
             timeouts = (15, 180)
             last_error = ""
-            for attempt, candidate in enumerate(_github_download_candidates(self.url), 1):
+            candidates = _github_download_candidates(self.url, use_mirrors=self.use_mirrors)
+            if not candidates:
+                self.finished.emit(False, "", "没有可用的官方下载地址")
+                return
+            for attempt, candidate in enumerate(candidates, 1):
                 if self.cancelled:
                     self.finished.emit(False, "", "下载已取消")
                     return
@@ -3480,6 +3515,11 @@ class DownloadWorker(QObject):
                         allow_redirects=True,
                     ) as response:
                         response.raise_for_status()
+                        # After redirects, final URL for official path should still be GitHub CDN
+                        # when mirrors are off; mirror hosts are intentional when opted in.
+                        final_url = str(getattr(response, "url", "") or candidate)
+                        if not self.use_mirrors and not is_allowed_github_asset_url(final_url):
+                            raise RuntimeError(f"重定向到非官方主机，已中止：{urlparse(final_url).hostname}")
                         total = int(response.headers.get("content-length", 0) or 0)
                         downloaded = 0
                         with open(dest, "wb") as handle:
@@ -3506,6 +3546,11 @@ class DownloadWorker(QObject):
                                 f"下载不完整：已下 {size // (1024 * 1024)} MB /"
                                 f" 预期 {total // (1024 * 1024)} MB"
                             )
+                        if ext.lower() == ".exe":
+                            with open(dest, "rb") as probe:
+                                magic = probe.read(2)
+                            if magic != b"MZ":
+                                raise RuntimeError("安装包不是有效的 Windows PE（缺少 MZ 头），已丢弃")
                         self.progress.emit(100)
                         self.finished.emit(True, str(dest), "")
                         return
@@ -3516,13 +3561,14 @@ class DownloadWorker(QObject):
                             dest.unlink(missing_ok=True)
                     except Exception:
                         pass
-                    # 下一个候选镜像
                     continue
 
             tip = (
-                f"下载失败（已尝试官方与镜像通道）。\n{last_error or '未知错误'}\n\n"
+                f"下载失败（已尝试{'官方与镜像' if self.use_mirrors else '官方'}通道）。\n"
+                f"{last_error or '未知错误'}\n\n"
                 "可到 GitHub Releases 页面用浏览器手动下载：\n"
-                "https://github.com/secure-artifacts/video-toolkit/releases/latest"
+                "https://github.com/secure-artifacts/video-toolkit/releases/latest\n"
+                "若 GitHub 较慢，可勾选顶栏「更新走镜像」后再试。"
             )
             self.finished.emit(False, "", tip)
         except Exception as exc:
@@ -3618,6 +3664,19 @@ class MainWindow(QMainWindow):
         self.update_btn.setToolTip("检查是否有新版本；启动后也会在后台静默检查")
         self.update_btn.clicked.connect(lambda: self._check_update(manual=True))
         nav_layout.addWidget(self.update_btn)
+
+        self.update_mirror_chk = QCheckBox("更新走镜像")
+        self.update_mirror_chk.setObjectName("updateMirrorCheck")
+        self.update_mirror_chk.setToolTip(
+            "默认关闭。仅在访问 GitHub 很慢时勾选；镜像站不在官方供应链内，有被替换安装包的风险。"
+        )
+        try:
+            mirrors_on = bool((self.store.data.get("updater") or {}).get("use_github_mirrors"))
+        except Exception:
+            mirrors_on = False
+        self.update_mirror_chk.setChecked(mirrors_on)
+        self.update_mirror_chk.toggled.connect(self._on_update_mirror_toggled)
+        nav_layout.addWidget(self.update_mirror_chk)
 
         self.log_nav_btn = QPushButton("查看软件日志")
         self.log_nav_btn.setObjectName("logNavButton")
@@ -6776,6 +6835,21 @@ class MainWindow(QMainWindow):
         if thread is not None:
             thread.deleteLater()
 
+    def _on_update_mirror_toggled(self, checked: bool):
+        with self.store.lock:
+            updater = dict(self.store.data.get("updater") or {})
+            updater["use_github_mirrors"] = bool(checked)
+            self.store.data["updater"] = updater
+            self.store.save()
+
+    def _updater_use_mirrors(self) -> bool:
+        try:
+            if hasattr(self, "update_mirror_chk") and self.update_mirror_chk is not None:
+                return bool(self.update_mirror_chk.isChecked())
+        except RuntimeError:
+            pass
+        return bool((self.store.data.get("updater") or {}).get("use_github_mirrors"))
+
     def _start_update_download(self, version, url, filename):
         thread = getattr(self, "_download_thread", None)
         if thread is not None:
@@ -6795,7 +6869,9 @@ class MainWindow(QMainWindow):
             return
 
         self._download_thread = QThread(self)
-        self._download_worker = DownloadWorker(url, version, filename)
+        self._download_worker = DownloadWorker(
+            url, version, filename, use_mirrors=self._updater_use_mirrors(),
+        )
         self._download_worker.moveToThread(self._download_thread)
         self._download_thread.started.connect(self._download_worker.run)
         self._download_worker.progress.connect(self._on_download_progress)
@@ -6825,7 +6901,17 @@ class MainWindow(QMainWindow):
                 if reply == QMessageBox.StandardButton.Yes:
                     try:
                         import subprocess
-                        subprocess.Popen([file_path], shell=True)
+                        # Never shell=True: path/version must not hit cmd metacharacters.
+                        path = str(Path(file_path).resolve())
+                        if not path.lower().endswith(".exe"):
+                            raise RuntimeError("安装包扩展名异常")
+                        with open(path, "rb") as probe:
+                            if probe.read(2) != b"MZ":
+                                raise RuntimeError("安装包不是有效的 Windows PE")
+                        if sys.platform.startswith("win"):
+                            os.startfile(path)  # type: ignore[attr-defined]
+                        else:
+                            subprocess.Popen([path], shell=False)
                         self.close()
                     except Exception as e:
                         QMessageBox.warning(

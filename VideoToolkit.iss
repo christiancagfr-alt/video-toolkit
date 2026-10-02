@@ -1,6 +1,6 @@
-[Setup]
+﻿[Setup]
 AppName=VideoToolkit
-AppVersion=1.7.69
+AppVersion=1.7.70
 AppPublisher=secure-artifacts
 AppPublisherURL=https://github.com/secure-artifacts/video-toolkit
 AppSupportURL=https://github.com/secure-artifacts/video-toolkit/issues
@@ -10,7 +10,7 @@ UninstallDisplayIcon={app}\VideoToolkit.exe
 Compression=lzma2
 SolidCompression=yes
 OutputDir=.
-OutputBaseFilename=VideoToolkit_Setup_v1.7.69
+OutputBaseFilename=VideoToolkit_Setup_v1.7.70
 SetupIconFile=logo.ico
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -24,4 +24,5 @@ Name: "{group}\VideoToolkit"; Filename: "{app}\VideoToolkit.exe"
 Name: "{userdesktop}\VideoToolkit"; Filename: "{app}\VideoToolkit.exe"
 
 [Run]
-Filename: "{app}\VideoToolkit.exe"; Description: "运行 VideoToolkit"; Flags: postinstall nowait
+Filename: "{app}\VideoToolkit.exe"; Description: "杩愯 VideoToolkit"; Flags: postinstall nowait
+

@@ -12,10 +12,9 @@ on:
         default: 'v1.7.64'
         type: string
 
+# Least privilege at workflow level; jobs that attest/release elevate locally.
 permissions:
-  id-token: write
-  contents: write
-  attestations: write
+  contents: read
 
 env:
   RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -23,15 +22,25 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          if ($tag -notmatch '^v?[0-9A-Za-z._-]+$') { throw "Invalid RELEASE_TAG: $tag" }
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: pip
@@ -111,7 +120,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path 'dist_final' -Force | Out-Null
-          $tag = "${{ env.RELEASE_TAG }}"
+          $tag = $env:RELEASE_TAG
           $version = $tag.Trim().TrimStart('v')
           if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Invalid version from tag: $tag" }
           # Keep Inno Setup output name in sync with the git tag (avoids Setup_vX vs AppVersion mismatch).
@@ -131,14 +140,14 @@ jobs:
           Move-Item -LiteralPath $setup -Destination 'dist_final\' -Force
 
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             dist_final/*.zip
             dist_final/*.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: video-toolkit-windows-x64
           path: dist_final/*
@@ -154,15 +163,26 @@ jobs:
           - os: macos-15-intel
             arch: x64
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
+      - name: Validate release tag
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9A-Za-z._-]*|[0-9A-Za-z._-]*) ;;
+            *) echo "Invalid RELEASE_TAG: $RELEASE_TAG"; exit 1 ;;
+          esac
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: pip
@@ -231,21 +251,23 @@ jobs:
           echo "Bundled ONNX Runtime: $ONNX_RUNTIME"
 
       - name: Package final artifact
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p dist_final
           ditto -c -k --sequesterRsrc --keepParent \
             "dist_macos/视频工具合集.app" \
-            "dist_final/video-toolkit-macos-${{ matrix.arch }}-${{ env.RELEASE_TAG }}.zip"
+            "dist_final/video-toolkit-macos-${ARCH}-${RELEASE_TAG}.zip"
 
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             dist_final/*.zip
             dist_final/*.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: video-toolkit-macos-${{ matrix.arch }}
           path: dist_final/*.zip
@@ -253,15 +275,26 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
+      - name: Validate release tag
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9A-Za-z._-]*|[0-9A-Za-z._-]*) ;;
+            *) echo "Invalid RELEASE_TAG: $RELEASE_TAG"; exit 1 ;;
+          esac
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -325,21 +358,20 @@ jobs:
       - name: Package final artifact
         run: |
           mkdir -p dist_final
-          TAG="${{ env.RELEASE_TAG }}"
           (
             cd dist_linux
-            zip -r -q "../dist_final/video-toolkit-linux-x64-${TAG}.zip" VideoToolkit
+            zip -r -q "../dist_final/video-toolkit-linux-x64-${RELEASE_TAG}.zip" VideoToolkit
           )
           ls -lh dist_final/
 
       - name: Attest Build Provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             dist_final/*.zip
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: video-toolkit-linux-x64
           path: dist_final/*.zip
@@ -348,12 +380,14 @@ jobs:
   release:
     needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     # 若某一平台失败仍尽量用已成功产物发版
     if: ${{ always() && needs.build-windows.result == 'success' }}
 
     steps:
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -361,7 +395,7 @@ jobs:
           # (download-artifact v4 无 pattern 过滤失败 job；merge 成功的即可)
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_TAG }}

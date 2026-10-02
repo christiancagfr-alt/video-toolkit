@@ -26,7 +26,7 @@ PYTHON_COMPONENTS = [
     ("OpenCV", "cv2", "opencv-python"),
     ("yt-dlp", "yt_dlp", "yt-dlp"),
     ("SceneDetect", "scenedetect", "scenedetect[opencv]"),
-    ("MoviePy", "moviepy", "moviepy"),
+
     ("Requests", "requests", "requests"),
     ("本地 Whisper", "faster_whisper", "faster-whisper"),
     ("ONNX Runtime / VAD", "onnxruntime", "onnxruntime"),
@@ -743,6 +743,11 @@ class InstallWorker(QObject):
                     member = next((x for x in members if x.lower().endswith("/bin/" + executable)), None)
                     if not member:
                         raise RuntimeError(f"安装包中未找到 {executable}")
+                    member_path = Path(member)
+                    if member_path.is_absolute() or ".." in member_path.parts:
+                        raise RuntimeError(f"安装包含非法路径：{member}")
+                    if not member_path.name.lower() == executable:
+                        raise RuntimeError(f"安装包成员名异常：{member}")
                     with package.open(member) as source, (component_bin() / executable).open("wb") as target:
                         shutil.copyfileobj(source, target)
         bin_text = str(component_bin())
