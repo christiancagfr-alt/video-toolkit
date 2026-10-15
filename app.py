@@ -86,7 +86,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.72").strip().lstrip("v") or "1.7.72"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.73").strip().lstrip("v") or "1.7.73"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -1415,8 +1415,8 @@ class TranscribeWorker(QObject):
             span = max(0.5, float(segs[-1].get("end") or 0) - float(segs[0].get("start") or 0))
             if n_words < max(3, int(span / 1.6)):
                 return False
-            # 长视频：词轴覆盖率过低 = 第一次常对不上口型 / 总时长偏短
-            if expect_dur >= 90 and n_words > 0:
+            # 中长视频：词轴覆盖率过低 = 第一次常对不上口型 / 总时长偏短
+            if expect_dur >= 60 and n_words > 0:
                 last_end = max(float(s.get("end") or 0) for s in segs)
                 if last_end < expect_dur * 0.90:
                     return False
@@ -1444,15 +1444,16 @@ class TranscribeWorker(QObject):
             return current
 
         def _transcribe_long_chunked(model, wav_path, total_dur, *, use_vad=None):
-            """≥90s：重叠分段识别再拼时间戳，避免整段截断，也避免无重叠硬切丢边界词。
+            """长音频/长文案：重叠分段识别再拼时间戳，避免整段截断与边界丢词。
 
             旧实现用 ffmpeg segment 无重叠切片，却按 overlap 丢掉下一段开头词，
             会在每 75s 边界制造缺口；合成成品再提取时时间轴更容易看起来「对不齐」。
             """
             import tempfile
             creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            chunk_len, overlap = 75.0, 2.0
-            step = max(45.0, chunk_len - overlap)
+            # 略缩短单段、加大重叠：长口播/长文案更稳，边界词更不容易丢
+            chunk_len, overlap = 60.0, 3.0
+            step = max(40.0, chunk_len - overlap)
             total_dur = max(0.5, float(total_dur or 0.5))
             starts = []
             cursor = 0.0
@@ -1531,7 +1532,8 @@ class TranscribeWorker(QObject):
                 f"（设备 {self._local_device}，模型 {getattr(self, '_local_model_name', '?')}）"
             )
             segments, info = None, None
-            if audio_dur >= 90 and prep_wav is not None:
+            # ≥60s 即分段：中长文案/口播不必等满 90s 才走片段读取
+            if audio_dur >= 60 and prep_wav is not None:
                 chunked = _transcribe_long_chunked(self._local_model, asr_audio, audio_dur)
                 if chunked is not None:
                     segments, info = chunked
@@ -1550,7 +1552,7 @@ class TranscribeWorker(QObject):
                 if _pick_better_segments(segments, segments2, audio_dur) is segments2:
                     segments, info = segments2, info2
                 if (
-                    audio_dur >= 90
+                    audio_dur >= 60
                     and prep_wav is not None
                     and not _word_density_ok(segments, audio_dur)
                 ):

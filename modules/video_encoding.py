@@ -380,6 +380,172 @@ def remux_zero_start(ffmpeg, path, fps=None):
         return False
 
 
+def wrap_with_intro_outro(
+    ffmpeg,
+    body_path,
+    *,
+    intro_path: str = "",
+    outro_path: str = "",
+    work_dir=None,
+    target_w: int = 0,
+    target_h: int = 0,
+    fps: float = 30.0,
+):
+    """Optionally prepend/append bumper clips around a finished body video.
+
+    Returns the final path (may replace body_path in place). Empty bumpers → no-op.
+    Bumpers are normalized to body size/fps then concat-filtered (hard cut).
+    """
+    from pathlib import Path
+    import os
+    import tempfile
+
+    body = Path(body_path)
+    if not body.is_file() or body.stat().st_size < 1024:
+        return str(body)
+    intro = Path(intro_path) if intro_path and Path(intro_path).is_file() else None
+    outro = Path(outro_path) if outro_path and Path(outro_path).is_file() else None
+    if intro is None and outro is None:
+        return str(body)
+
+    # Probe body size if not provided
+    tw, th = int(target_w or 0), int(target_h or 0)
+    if tw < 16 or th < 16:
+        try:
+            ffprobe = Path(str(ffmpeg)).with_name("ffprobe" + Path(str(ffmpeg)).suffix)
+            if not ffprobe.exists():
+                ffprobe = Path("ffprobe")
+            probe = subprocess.run(
+                [
+                    str(ffprobe), "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height",
+                    "-of", "csv=p=0:s=x", str(body),
+                ],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                **hidden_kwargs(), timeout=20,
+            )
+            parts_wh = (probe.stdout or "").strip().split("x")
+            tw, th = int(parts_wh[0]), int(parts_wh[1])
+        except Exception:
+            tw, th = 1080, 1920
+    tw = max(16, tw - (tw % 2))
+    th = max(16, th - (th % 2))
+    rate = float(fps) if fps and float(fps) > 1 else 30.0
+    if abs(rate - round(rate)) < 0.02:
+        rate_expr = str(int(round(rate)))
+    else:
+        rate_expr = f"{rate:.3f}".rstrip("0").rstrip(".")
+
+    cache = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="vt_bumpers_"))
+    cache.mkdir(parents=True, exist_ok=True)
+    ffprobe_bin = Path(str(ffmpeg)).with_name("ffprobe" + Path(str(ffmpeg)).suffix)
+    if not ffprobe_bin.exists():
+        ffprobe_bin = Path("ffprobe")
+
+    def _has_audio(src: Path) -> bool:
+        try:
+            probe = subprocess.run(
+                [
+                    str(ffprobe_bin), "-v", "error", "-select_streams", "a",
+                    "-show_entries", "stream=index", "-of", "csv=p=0", str(src),
+                ],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                **hidden_kwargs(), timeout=20,
+            )
+            return bool((probe.stdout or "").strip())
+        except Exception:
+            return True
+
+    def _normalize(src: Path, label: str) -> Path:
+        dest = cache / f"{label}_{src.stem[:40]}_{tw}x{th}.mp4"
+        if dest.is_file() and dest.stat().st_size > 1024:
+            try:
+                if dest.stat().st_mtime >= src.stat().st_mtime:
+                    return dest
+            except OSError:
+                pass
+        vf = (
+            f"scale={tw}:{th}:force_original_aspect_ratio=decrease,"
+            f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={rate_expr},format=yuv420p"
+        )
+        if _has_audio(src):
+            cmd = [
+                str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+                "-i", str(src),
+                "-vf", vf,
+                "-af", "aresample=async=1:first_pts=0",
+                "-ar", "48000", "-ac", "2",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(dest),
+            ]
+        else:
+            cmd = [
+                str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+                "-i", str(src),
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-vf", vf,
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(dest),
+            ]
+        result = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            **hidden_kwargs(),
+            timeout=600,
+        )
+        if result.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1024:
+            raise RuntimeError(
+                f"片头/片尾规范化失败（{src.name}）：{(result.stderr or '')[-400:]}"
+            )
+        return dest
+
+    parts = []
+    if intro is not None:
+        parts.append(_normalize(intro, "intro"))
+    # Also normalize body so concat codecs match
+    parts.append(_normalize(body, "body"))
+    if outro is not None:
+        parts.append(_normalize(outro, "outro"))
+
+    n = len(parts)
+    inputs = []
+    for p in parts:
+        inputs.extend(["-i", str(p)])
+    fc_in = "".join(f"[{i}:v:0][{i}:a:0]" for i in range(n))
+    fc = f"{fc_in}concat=n={n}:v=1:a=1[v][a]"
+    out = cache / f"wrapped_{body.stem[:40]}.mp4"
+    cmd = [
+        str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+        *inputs,
+        "-filter_complex", fc,
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(out),
+    ]
+    result = subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+        **hidden_kwargs(),
+        timeout=1200,
+    )
+    if result.returncode != 0 or not out.is_file() or out.stat().st_size < 1024:
+        raise RuntimeError(f"拼接片头/片尾失败：{(result.stderr or '')[-500:]}")
+    try:
+        os.replace(str(out), str(body))
+        return str(body)
+    except OSError:
+        return str(out)
+
+
 def calculate_target_size(src_w, src_h, aspect_ratio_str, resolution_str):
     # Determine orientation
     is_portrait = src_h > src_w

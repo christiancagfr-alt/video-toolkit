@@ -15,7 +15,7 @@ from .path_picker import VIDEO_EXTENSIONS, collect_files, natural_key
 from .settings_page import hidden_kwargs
 from .video_encoding import (
     ENCODER_LABELS, encoder_args, resolve_encoder, calculate_target_size,
-    davinci_safe_mux_args, remux_zero_start,
+    davinci_safe_mux_args, remux_zero_start, wrap_with_intro_outro,
 )
 
 
@@ -2686,6 +2686,36 @@ class GroupMergeWorker(QObject):
                     destination = self._write_final_output(concat_command, destination)
                     if remux_zero_start(self.ffmpeg, destination):
                         self.log.emit("已归零成品时间戳（避免达芬奇/Resolve 片头黑帧）。")
+                    # 可选片头/片尾（硬切接到正文前后）
+                    intro_p = ""
+                    outro_p = ""
+                    if self.settings.get("intro_enabled"):
+                        intro_p = str(self.settings.get("selected_intro_path") or "").strip()
+                    if self.settings.get("outro_enabled"):
+                        outro_p = str(self.settings.get("selected_outro_path") or "").strip()
+                    if (intro_p and Path(intro_p).is_file()) or (outro_p and Path(outro_p).is_file()):
+                        try:
+                            tw = int(self.settings.get("target_w") or 0)
+                            th = int(self.settings.get("target_h") or 0)
+                            wrap_with_intro_outro(
+                                self.ffmpeg,
+                                destination,
+                                intro_path=intro_p if self.settings.get("intro_enabled") else "",
+                                outro_path=outro_p if self.settings.get("outro_enabled") else "",
+                                work_dir=Path(self.output) / ".intro_outro_cache",
+                                target_w=tw,
+                                target_h=th,
+                                fps=30,
+                            )
+                            remux_zero_start(self.ffmpeg, destination)
+                            bits = []
+                            if intro_p and Path(intro_p).is_file() and self.settings.get("intro_enabled"):
+                                bits.append(f"片头 {Path(intro_p).name}")
+                            if outro_p and Path(outro_p).is_file() and self.settings.get("outro_enabled"):
+                                bits.append(f"片尾 {Path(outro_p).name}")
+                            self.log.emit(f"已拼接{' + '.join(bits)}。")
+                        except Exception as bumper_exc:
+                            self.log.emit(f"片头/片尾拼接失败（正文仍保留）：{bumper_exc}")
                     # 已对齐则静默跳过，不刷日志（避免误以为又慢了一遍）
                     if group_manual_bounds:
                         self.log.emit(f"群组切片功能：正在对合并后的成品视频应用手动切片 {group_manual_bounds[0]:.2f}s - {group_manual_bounds[1]:.2f}s...")

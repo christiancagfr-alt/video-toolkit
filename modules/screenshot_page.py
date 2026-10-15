@@ -4,6 +4,7 @@ import cv2
 import json
 import time
 import subprocess
+import shutil
 import urllib.request
 import ctypes
 import logging
@@ -490,15 +491,64 @@ class VideoCompressThread(QThread):
         # 某些 MOV 里的 pcm / 特殊轨 copy 到 mp4 会失败，调用方再回退重编码
         return cmd
 
-    def _build_reencode_cmd(self, src: Path, dst: Path) -> list[str]:
-        # 高质量重编码：分辨率/帧率不变，CRF18 + aac，体积通常明显下降
+    def _probe_video_bitrate(self, src: Path) -> int:
+        """Return approximate video bitrate in bps (0 if unknown)."""
+        try:
+            ffprobe = str(Path(self.ffmpeg).with_name(
+                "ffprobe.exe" if Path(self.ffmpeg).suffix.lower() == ".exe" else "ffprobe"
+            ))
+            if not Path(ffprobe).is_file():
+                ffprobe = "ffprobe"
+            creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            result = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=bit_rate:format=bit_rate",
+                    "-of", "json", str(src),
+                ],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                creationflags=creation, timeout=30,
+            )
+            import json as _json
+            data = _json.loads(result.stdout or "{}")
+            for stream in data.get("streams") or []:
+                br = int(stream.get("bit_rate") or 0)
+                if br > 0:
+                    return br
+            br = int((data.get("format") or {}).get("bit_rate") or 0)
+            return max(0, br)
+        except Exception:
+            return 0
+
+    def _pick_compress_crf(self, src: Path) -> int:
+        """Choose CRF so recompress usually shrinks already-encoded phone/camera files.
+
+        CRF18 is near-lossless and often *larger* than social-media H.264 sources.
+        Use higher CRF (smaller file) when source bitrate is already modest.
+        """
+        br = self._probe_video_bitrate(src)
+        if br <= 0:
+            return 23
+        mbps = br / 1_000_000.0
+        if mbps >= 12:
+            return 20
+        if mbps >= 6:
+            return 22
+        if mbps >= 3:
+            return 24
+        return 26
+
+    def _build_reencode_cmd(self, src: Path, dst: Path, crf: int | None = None) -> list[str]:
+        # 压缩向重编码：分辨率/帧率不变；CRF 按片源码率自适应，避免 CRF18 反而变大
+        use_crf = int(crf if crf is not None else self._pick_compress_crf(src))
+        use_crf = max(16, min(32, use_crf))
         return [
             self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(src),
             "-map", "0:v:0", "-map", "0:a:0?",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-c:v", "libx264", "-preset", "medium", "-crf", str(use_crf),
             "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
+            "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             str(dst),
         ]
@@ -547,10 +597,53 @@ class VideoCompressThread(QThread):
                     except OSError:
                         pass
             if not success:
-                ok_run, detail = self._run_ffmpeg(self._build_reencode_cmd(src, dst))
+                crf = self._pick_compress_crf(src)
+                ok_run, detail = self._run_ffmpeg(self._build_reencode_cmd(src, dst, crf))
                 if ok_run and dst.is_file() and dst.stat().st_size > 1024:
-                    success = True
-                    self.log_signal.emit("  · 高质量重编码完成（CRF18，分辨率不变）")
+                    # 若仍比源大：再抬 CRF 重压一次；还大则保留较小的那份并提示
+                    dst_size = self._probe_size(dst)
+                    if src_size > 0 and dst_size > src_size * 1.02 and crf < 28:
+                        harder = min(28, crf + 4)
+                        self.log_signal.emit(
+                            f"  · CRF{crf} 后体积仍大于源（{dst_size / (1024 * 1024):.1f} MB），"
+                            f"改用 CRF{harder} 再压…"
+                        )
+                        try:
+                            if dst.exists():
+                                dst.unlink()
+                        except OSError:
+                            pass
+                        ok_run2, detail2 = self._run_ffmpeg(
+                            self._build_reencode_cmd(src, dst, harder)
+                        )
+                        if ok_run2 and dst.is_file() and dst.stat().st_size > 1024:
+                            ok_run, detail, crf = ok_run2, detail2, harder
+                            dst_size = self._probe_size(dst)
+                    if src_size > 0 and dst_size > src_size * 1.02:
+                        # 压缩目标是缩小：仍更大则丢弃结果，复制源到目标名并说明
+                        self.log_signal.emit(
+                            f"  · 重编码后仍更大（CRF{crf}），保留较小文件策略：复制原片…"
+                        )
+                        try:
+                            if dst.exists():
+                                dst.unlink()
+                        except OSError:
+                            pass
+                        try:
+                            shutil.copy2(src, dst)
+                            success = dst.is_file() and dst.stat().st_size > 1024
+                            if success:
+                                self.log_signal.emit(
+                                    "  · 已输出原片副本（该素材本身已较紧，再压会变大或损伤画质）"
+                                )
+                        except OSError as copy_exc:
+                            self.log_signal.emit(f"  · 复制原片失败：{copy_exc}")
+                            detail = str(copy_exc)
+                    else:
+                        success = True
+                        self.log_signal.emit(
+                            f"  · 压缩重编码完成（CRF{crf}，分辨率不变）"
+                        )
                 else:
                     self.log_signal.emit(f"  · 失败：{(detail or '')[-400:]}")
             if success:
@@ -789,8 +882,9 @@ class VideoTool(QMainWindow):
         ])
         self.video_mode.setToolTip(
             "仅转封装：音视频流复制，只换容器（如 MOV→MP4），画质完全不变；"
-            "体积通常接近，部分素材因编码不兼容会自动改用高质量重编码。\n"
-            "高质量压缩：保持分辨率，H.264 CRF18 重编码，体积通常明显变小，肉眼几乎无损。"
+            "体积通常接近，部分素材因编码不兼容会自动改用压缩重编码。\n"
+            "高质量压缩：保持分辨率，H.264 按片源码率自适应 CRF（约 20–26）重编码；"
+            "若仍比原片大则保留较小结果，避免越压越大。"
         )
         video_form.addRow("处理模式", self.video_mode)
 
@@ -814,8 +908,8 @@ class VideoTool(QMainWindow):
         video_form.addRow("保存目录", video_out_row)
 
         video_hint = QLabel(
-            "逻辑：能 copy 就 copy（画质 100% 不变）；不能再 CRF18 重编码。"
-            "不会放大分辨率；4K 素材仍输出 4K。"
+            "逻辑：能 copy 就 copy（画质 100% 不变）；不能再按片源自适应 CRF 重编码。"
+            "不会放大分辨率；4K 素材仍输出 4K；压完若更大会自动回退。"
         )
         video_hint.setWordWrap(True)
         video_hint.setStyleSheet("color:#94a3b8;font-size:11px;")

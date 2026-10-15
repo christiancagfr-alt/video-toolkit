@@ -127,7 +127,7 @@ from .language_style import (
 from .video_encoding import (
     ENCODER_LABELS, encoder_args, resolve_encoder, calculate_target_size,
     diagnose_encoders, encoder_probe_detail, davinci_safe_mux_args,
-    remux_zero_start,
+    remux_zero_start, wrap_with_intro_outro,
 )
 from .app_logging import write_app_log
 from .canva_timeline import CanvaTimelinePanel, TransitionPresetButton
@@ -6157,6 +6157,40 @@ class CaptionWorker(QObject):
                     self.log.emit(
                         f"[{index + 1}/{len(self.videos)}] 已归零成品时间戳（避免达芬奇片头黑帧）。"
                     )
+                # 可选片头/片尾：字幕烧录完成后再拼接，避免片头片尾被烧上正文字幕
+                intro_p = ""
+                outro_p = ""
+                if self.settings.get("intro_enabled"):
+                    intro_p = str(self.settings.get("selected_intro_path") or "").strip()
+                if self.settings.get("outro_enabled"):
+                    outro_p = str(self.settings.get("selected_outro_path") or "").strip()
+                if (intro_p and Path(intro_p).is_file()) or (outro_p and Path(outro_p).is_file()):
+                    try:
+                        tw = int(video_settings.get("target_w") or 0)
+                        th = int(video_settings.get("target_h") or 0)
+                        wrap_with_intro_outro(
+                            self.ffmpeg,
+                            destination,
+                            intro_path=intro_p if self.settings.get("intro_enabled") else "",
+                            outro_path=outro_p if self.settings.get("outro_enabled") else "",
+                            work_dir=Path(self.output) / ".intro_outro_cache",
+                            target_w=tw,
+                            target_h=th,
+                            fps=30,
+                        )
+                        remux_zero_start(self.ffmpeg, destination, fps=30)
+                        bits = []
+                        if intro_p and Path(intro_p).is_file() and self.settings.get("intro_enabled"):
+                            bits.append(f"片头 {Path(intro_p).name}")
+                        if outro_p and Path(outro_p).is_file() and self.settings.get("outro_enabled"):
+                            bits.append(f"片尾 {Path(outro_p).name}")
+                        self.log.emit(
+                            f"[{index + 1}/{len(self.videos)}] 已拼接{' + '.join(bits)}。"
+                        )
+                    except Exception as bumper_exc:
+                        self.log.emit(
+                            f"[{index + 1}/{len(self.videos)}] 片头/片尾拼接失败（正文仍保留）：{bumper_exc}"
+                        )
                 completed[str(video.resolve())]={"fingerprint":fingerprint,"destination":str(destination),
                     "original":original,"chinese":chinese,"word_srt":word_srt,"phrase_srt":phrase_srt}
                 checkpoint["status"]="rendering"; _write_reels_checkpoint(self.output,checkpoint)
@@ -7519,6 +7553,8 @@ class DynamicCaptionPage(QWidget):
         self.timeline_edit_states = {}
         self._selected_bgm_path = ""
         self._selected_ambient_path = ""  # 环境音（独立于 BGM，可上时间轴）
+        self._selected_intro_path = ""  # 可选片头视频
+        self._selected_outro_path = ""  # 可选片尾视频
         self._already_renamed_videos = set()  # 合成阶段已命名的成品，导出时跳过二次命名
         # 单视频字幕样式覆盖：有记录的视频导出/预览用独立样式，其余用批量共用样式
         self.video_style_overrides = {}
@@ -9647,6 +9683,52 @@ class DynamicCaptionPage(QWidget):
         ambient_layout.addLayout(ambient_vol_row)
         bgm_editor_layout.addWidget(ambient_group)
 
+        # 可选片头 / 片尾：合成或批量导出时接到正文前后（硬切，不对口型）
+        bumper_group = QGroupBox("片头 / 片尾（可选）")
+        bumper_layout = QVBoxLayout(bumper_group)
+        bumper_tip = QLabel(
+            "【怎么用】需要品牌开场/收尾时再勾选；不勾选则不影响现有流程。\n"
+            "片头接在正文前面，片尾接在正文后面；导出时硬切拼接，片头片尾默认不烧字幕。"
+        )
+        bumper_tip.setWordWrap(True)
+        bumper_tip.setStyleSheet("color:#fde68a;font-size:11px;")
+        bumper_layout.addWidget(bumper_tip)
+        intro_row = QHBoxLayout()
+        self.intro_enabled = QCheckBox("启用片头")
+        self.intro_enabled.setChecked(False)
+        self.intro_enabled.toggled.connect(self._intro_enabled_changed)
+        choose_intro = QPushButton("选择片头…")
+        choose_intro.clicked.connect(self._choose_intro_file)
+        clear_intro = QPushButton("清除")
+        clear_intro.clicked.connect(self._clear_intro_file)
+        intro_row.addWidget(self.intro_enabled)
+        intro_row.addWidget(choose_intro)
+        intro_row.addWidget(clear_intro)
+        intro_row.addStretch()
+        bumper_layout.addLayout(intro_row)
+        self.intro_source_display = QLineEdit()
+        self.intro_source_display.setReadOnly(True)
+        self.intro_source_display.setPlaceholderText("尚未选择片头视频")
+        bumper_layout.addWidget(self.intro_source_display)
+        outro_row = QHBoxLayout()
+        self.outro_enabled = QCheckBox("启用片尾")
+        self.outro_enabled.setChecked(False)
+        self.outro_enabled.toggled.connect(self._outro_enabled_changed)
+        choose_outro = QPushButton("选择片尾…")
+        choose_outro.clicked.connect(self._choose_outro_file)
+        clear_outro = QPushButton("清除")
+        clear_outro.clicked.connect(self._clear_outro_file)
+        outro_row.addWidget(self.outro_enabled)
+        outro_row.addWidget(choose_outro)
+        outro_row.addWidget(clear_outro)
+        outro_row.addStretch()
+        bumper_layout.addLayout(outro_row)
+        self.outro_source_display = QLineEdit()
+        self.outro_source_display.setReadOnly(True)
+        self.outro_source_display.setPlaceholderText("尚未选择片尾视频")
+        bumper_layout.addWidget(self.outro_source_display)
+        bgm_editor_layout.addWidget(bumper_group)
+
         bgm_preview_group=QGroupBox("起始点与试听")
         bgm_preview_layout=QVBoxLayout(bgm_preview_group)
         bgm_play_row=QHBoxLayout()
@@ -10842,6 +10924,100 @@ class DynamicCaptionPage(QWidget):
             if enabled else "已关闭环境音。"
         )
         self._refresh_canva_timeline()
+
+    def _choose_intro_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择片头视频", "",
+            "视频 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        self._selected_intro_path = str(Path(path).resolve())
+        if hasattr(self, "intro_source_display"):
+            self.intro_source_display.setText(self._selected_intro_path)
+        if hasattr(self, "intro_enabled"):
+            self.intro_enabled.blockSignals(True)
+            self.intro_enabled.setChecked(True)
+            self.intro_enabled.blockSignals(False)
+        self._append_run_log(f"已选择片头：{Path(path).name}")
+        try:
+            self._save_style_preferences()
+        except Exception:
+            pass
+
+    def _clear_intro_file(self):
+        self._selected_intro_path = ""
+        if hasattr(self, "intro_source_display"):
+            self.intro_source_display.clear()
+        if hasattr(self, "intro_enabled"):
+            self.intro_enabled.blockSignals(True)
+            self.intro_enabled.setChecked(False)
+            self.intro_enabled.blockSignals(False)
+        self._append_run_log("已清除片头。")
+        try:
+            self._save_style_preferences()
+        except Exception:
+            pass
+
+    def _intro_enabled_changed(self, enabled):
+        self._append_run_log("已启用片头。" if enabled else "已关闭片头。")
+        try:
+            self._save_style_preferences()
+        except Exception:
+            pass
+
+    def _choose_outro_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择片尾视频", "",
+            "视频 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        self._selected_outro_path = str(Path(path).resolve())
+        if hasattr(self, "outro_source_display"):
+            self.outro_source_display.setText(self._selected_outro_path)
+        if hasattr(self, "outro_enabled"):
+            self.outro_enabled.blockSignals(True)
+            self.outro_enabled.setChecked(True)
+            self.outro_enabled.blockSignals(False)
+        self._append_run_log(f"已选择片尾：{Path(path).name}")
+        try:
+            self._save_style_preferences()
+        except Exception:
+            pass
+
+    def _clear_outro_file(self):
+        self._selected_outro_path = ""
+        if hasattr(self, "outro_source_display"):
+            self.outro_source_display.clear()
+        if hasattr(self, "outro_enabled"):
+            self.outro_enabled.blockSignals(True)
+            self.outro_enabled.setChecked(False)
+            self.outro_enabled.blockSignals(False)
+        self._append_run_log("已清除片尾。")
+        try:
+            self._save_style_preferences()
+        except Exception:
+            pass
+
+    def _outro_enabled_changed(self, enabled):
+        self._append_run_log("已启用片尾。" if enabled else "已关闭片尾。")
+        try:
+            self._save_style_preferences()
+        except Exception:
+            pass
+
+    def _resolved_intro_path(self) -> str:
+        if hasattr(self, "intro_enabled") and not self.intro_enabled.isChecked():
+            return ""
+        path = str(getattr(self, "_selected_intro_path", "") or "").strip()
+        return path if path and Path(path).is_file() else ""
+
+    def _resolved_outro_path(self) -> str:
+        if hasattr(self, "outro_enabled") and not self.outro_enabled.isChecked():
+            return ""
+        path = str(getattr(self, "_selected_outro_path", "") or "").strip()
+        return path if path and Path(path).is_file() else ""
 
     def _timeline_ambient_path(self, video_path=""):
         if hasattr(self, "ambient_enabled") and not self.ambient_enabled.isChecked():
@@ -12750,17 +12926,14 @@ class DynamicCaptionPage(QWidget):
             except Exception:
                 adj = max(0.0, float(seconds or 0.0))
 
+        # 严格按时间戳：片头/间隙无字幕块则留空，禁止把下一句提前到空档。
         event = next((item for item in phrase_events if item[0] <= adj <= item[1]), None)
         if event is None and phrase_events:
-            past = [item for item in phrase_events if item[0] <= adj]
+            past = [item for item in phrase_events if item[1] <= adj]
             if past:
                 last = past[-1]
-                if adj - last[1] <= 0.8:
+                if 0 <= adj - last[1] <= 0.25:
                     event = last
-                else:
-                    event = min(phrase_events, key=lambda item: abs(((item[0] + item[1]) / 2) - adj))
-            else:
-                event = min(phrase_events, key=lambda item: abs(item[0] - adj))
 
         if event:
             start, end = float(event[0]), float(event[1])
@@ -14072,6 +14245,14 @@ class DynamicCaptionPage(QWidget):
             "ambient_volume": int(
                 self.ambient_volume.value() if hasattr(self, "ambient_volume") else 20
             ),
+            "selected_intro_path": getattr(self, "_selected_intro_path", "") or "",
+            "intro_enabled": bool(
+                getattr(self, "intro_enabled", None) and self.intro_enabled.isChecked()
+            ),
+            "selected_outro_path": getattr(self, "_selected_outro_path", "") or "",
+            "outro_enabled": bool(
+                getattr(self, "outro_enabled", None) and self.outro_enabled.isChecked()
+            ),
             "aspect_ratio": self.aspect_ratio.currentText(),
             "resolution": self.resolution.currentText(),
             "video_extend_mode": self.video_extend_mode.currentText(),
@@ -14463,6 +14644,20 @@ class DynamicCaptionPage(QWidget):
                 self.ambient_volume.setValue(int(saved.get("ambient_volume") or 20))
             except (TypeError, ValueError):
                 pass
+        intro_path = str(saved.get("selected_intro_path") or "").strip()
+        if intro_path and Path(intro_path).is_file():
+            self._selected_intro_path = str(Path(intro_path).resolve())
+            if hasattr(self, "intro_source_display"):
+                self.intro_source_display.setText(self._selected_intro_path)
+        if "intro_enabled" in saved and hasattr(self, "intro_enabled"):
+            self.intro_enabled.setChecked(bool(saved.get("intro_enabled")))
+        outro_path = str(saved.get("selected_outro_path") or "").strip()
+        if outro_path and Path(outro_path).is_file():
+            self._selected_outro_path = str(Path(outro_path).resolve())
+            if hasattr(self, "outro_source_display"):
+                self.outro_source_display.setText(self._selected_outro_path)
+        if "outro_enabled" in saved and hasattr(self, "outro_enabled"):
+            self.outro_enabled.setChecked(bool(saved.get("outro_enabled")))
         # 恢复控件启用状态；_restoring_style 期间不会强改 audio_match_mode / 冲掉路径
         self._audio_mode_changed(self.audio_mode.currentText())
         # 再强制对齐一次 BGM/配乐勾选（与 UI 合成方式、记忆一致）
@@ -14882,19 +15077,16 @@ class DynamicCaptionPage(QWidget):
                 parse_srt(word_srt) if word_srt else [],
             )
         phrase_events, word_events_all = self._live_timeline_cache
+        # 严格按时间戳：当前时刻无字幕块则留空。绝不把「下一句」提前画到片头空档。
         event = next((item for item in phrase_events if item[0] <= seconds <= item[1]), None)
         if event is None and phrase_events:
-            # 在两条字幕间隙：仍显示刚结束的那条（更符合预览预期）
-            past = [item for item in phrase_events if item[0] <= seconds]
+            # 仅在「上一句刚结束」的极短间隙（≤0.25s）保持上一句，避免闪断；
+            # 片头无字幕、或间隙更长时一律空白。
+            past = [item for item in phrase_events if item[1] <= seconds]
             if past:
                 last = past[-1]
-                # 间隙不超过 0.8s 时保持上一句，否则找最近的一条
-                if seconds - last[1] <= 0.8:
+                if 0 <= seconds - last[1] <= 0.25:
                     event = last
-                else:
-                    event = min(phrase_events, key=lambda item: abs(((item[0]+item[1])/2) - seconds))
-            else:
-                event = min(phrase_events, key=lambda item: abs(item[0] - seconds))
         if event:
             text = event[2]
             word_events = [item for item in word_events_all
@@ -16926,6 +17118,14 @@ class DynamicCaptionPage(QWidget):
                 ),
                 "ambient_volume": (
                     self.ambient_volume.value() if hasattr(self, "ambient_volume") else 20
+                ),
+                "selected_intro_path": self._resolved_intro_path(),
+                "intro_enabled": bool(
+                    getattr(self, "intro_enabled", None) and self.intro_enabled.isChecked()
+                ),
+                "selected_outro_path": self._resolved_outro_path(),
+                "outro_enabled": bool(
+                    getattr(self, "outro_enabled", None) and self.outro_enabled.isChecked()
                 ),
                 "word_timelines":dict(self.timeline_words),
                 "word_timelines_source": dict(getattr(self, "timeline_words_source", {}) or {}),

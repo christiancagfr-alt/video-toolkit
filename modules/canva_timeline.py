@@ -316,12 +316,18 @@ class TimelineCanvas(QWidget):
         self.original_audio_enabled = bool(original_audio_enabled)
         self.clips = parse_srt(srt)
         cue_end = max((clip.end for clip in self.clips), default=0)
-        # 音画轨长度锁定传入的素材时长；错位长字幕只拉长可滚动区域，不把视频/原声条撑长
+        # 音画轨长度锁定传入的素材时长；用户切片后以 edit_state 轨长为准，勿撑回整段
         media_lock = max(int(self.media_source_duration_ms or 0), 1000)
-        if cue_end > media_lock + 200:
-            self.duration_ms = max(media_lock, cue_end)
+        user_edited = bool((edit_state or {}).get("user_edited"))
+        edit_duration = max(0, int((edit_state or {}).get("duration_ms") or 0))
+        if user_edited and edit_duration > 0:
+            content_end = max(1000, edit_duration)
         else:
-            self.duration_ms = media_lock
+            content_end = media_lock
+        if cue_end > content_end + 200:
+            self.duration_ms = max(content_end, cue_end)
+        else:
+            self.duration_ms = content_end
         project_key = str(video_name or "")
         tracks_state = (edit_state or {}).get("tracks") or {}
         is_new_project = project_key != self._project_key
@@ -752,20 +758,40 @@ class TimelineCanvas(QWidget):
     def set_srt(self, srt: str):
         self.clips = parse_srt(srt)
         cue_end = max((clip.end for clip in self.clips), default=0)
-        # 标尺锁定素材时长：短轴不缩短；长轴也不把音画轨拉长（避免错字幕把时间线撑飞）
+        # 标尺：优先尊重用户切片后的音画轨长度；未切片时才锁到素材全长
         media_lock = max(int(self.media_source_duration_ms or 0), 1000)
-        if cue_end > media_lock + 200:
-            # 仅拉长可滚动区域，方便看到越界字幕；音画条仍停在 media_lock
-            self.duration_ms = max(media_lock, cue_end)
+        track_end = max(
+            (
+                int(c.end or 0)
+                for kind in ("video", "original_audio")
+                for c in (self.media_clips.get(kind) or [])
+            ),
+            default=0,
+        )
+        user_trimmed = track_end > 0 and track_end + 80 < media_lock
+        content_end = max(track_end, 1000) if user_trimmed else media_lock
+        if cue_end > content_end + 200:
+            # 仅拉长可滚动区域，方便看到越界字幕；音画条仍停在 content_end
+            self.duration_ms = max(content_end, cue_end)
         else:
-            self.duration_ms = media_lock
-        # 单条未切片音画轨若短于素材锁，补齐到 media_lock（合成后只 set_srt 时常见）
+            self.duration_ms = content_end
+        # 仅当「未裁切的整段源」短于素材锁时补齐（合成后只 set_srt 的常见情况）。
+        # 用户切片/删除后 source 已缩短或 source_start>0：绝不可再垫回整段。
         for kind in ("video", "original_audio"):
             bars = self.media_clips.get(kind) or []
-            if len(bars) == 1 and int(bars[0].end or 0) + 80 < media_lock and int(bars[0].start or 0) <= 40:
-                clip = bars[0]
+            if len(bars) != 1:
+                continue
+            clip = bars[0]
+            if int(clip.start or 0) > 40:
+                continue
+            src_start = int(clip.source_start or 0)
+            src_end = int(clip.source_end or 0)
+            src_span = max(0, src_end - src_start)
+            if src_start > 40 or src_span + 80 < media_lock:
+                continue
+            if int(clip.end or 0) + 80 < media_lock:
                 clip.end = media_lock
-                if int(clip.source_end or 0) < media_lock:
+                if src_end < media_lock:
                     clip.source_end = media_lock
                 clip.source_duration = max(int(clip.source_duration or 0), media_lock)
         self._update_width()
@@ -1661,14 +1687,20 @@ class TimelineCanvas(QWidget):
             tracks = self.media_clips.get(kind, [])
             if 0 <= index < len(tracks):
                 if kind == "video" and len(tracks) == 1:
-                    return
+                    # 仅剩一整段时不能删空时间轴；提示用户先切片再删其中一段
+                    return False
                 self.push_undo()
                 removed = tracks.pop(index)
                 if kind == "video":
                     self._ripple_delete_range(removed.start, removed.end)
+                    # ripple 已 emit state；避免二次 emit 冲掉 duration
+                    self.selected = None
+                    self.update()
+                    return True
         self.selected = None
         self._emit_timeline_state()
         self.update()
+        return True
 
     def keyPressEvent(self, event):
         mods = event.modifiers()
@@ -2015,8 +2047,8 @@ class CanvaTimelinePanel(QWidget):
         )
         self.delete_button = QPushButton("删除")
         self.delete_button.setToolTip(
-            "删除当前选中的时间轴片段。\n"
-            "声明叠加轨（PNG/文字/蒙版）也可先点选色块再删，或右键删除。"
+            "删除当前选中的时间轴片段（先切片再删其中一段）。\n"
+            "仅剩一整段视频时不能删空；字幕块/声明叠加轨也可点选后删除。"
         )
         self.undo_button = QPushButton("撤销")
         self.undo_button.setToolTip("撤销上一步时间轴操作（Ctrl+Z）")
@@ -2158,7 +2190,7 @@ class CanvaTimelinePanel(QWidget):
         self.canvas.srtChanged.connect(lambda *_: self._refresh_undo_buttons())
         # 直接连接切片（勿再用 connect(lambda:None)+disconnect 占位，部分环境下会丢信号）
         self.cut_button.clicked.connect(self._on_cut_clicked)
-        self.delete_button.clicked.connect(self.canvas.delete_selected)
+        self.delete_button.clicked.connect(self._on_delete_clicked)
         self.clip_speed_apply.clicked.connect(self._apply_clip_speed)
         self.clip_speed.editingFinished.connect(self._apply_clip_speed)
         self.clip_speed_presets.activated.connect(self._fill_speed_from_preset)
@@ -2306,6 +2338,26 @@ class CanvaTimelinePanel(QWidget):
                     "把播放头拖到要切开的位置，点此切片。\n"
                     "优先切中视频轨；也可先点选某段再切。\n"
                     "切点需距片段两端至少约 0.05 秒。"
+                ),
+            )
+        self._refresh_undo_buttons()
+
+    def _on_delete_clicked(self):
+        """Toolbar delete with a short tip when the last video bar cannot be removed."""
+        selected = getattr(self.canvas, "selected", None)
+        result = self.canvas.delete_selected()
+        if result is False and selected and selected[0] == "video":
+            tip = (
+                "无法删除：视频轨只剩一整段时不能删空。\n"
+                "请先把播放头放到中间点「切片」，再选中要去掉的那一段删除。"
+            )
+            self.delete_button.setToolTip(tip)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(
+                5000,
+                lambda: self.delete_button.setToolTip(
+                    "删除当前选中的时间轴片段（先切片再删其中一段）。\n"
+                    "仅剩一整段视频时不能删空；字幕块/声明叠加轨也可点选后删除。"
                 ),
             )
         self._refresh_undo_buttons()

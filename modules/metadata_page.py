@@ -54,20 +54,60 @@ def unique_path(path: Path) -> Path:
     raise RuntimeError(f"无法生成不重复的输出文件名：{path.name}")
 
 
+def _logo_has_useful_alpha(logo: Image.Image) -> bool:
+    """True if the image already carries real transparency (skip hard knockout)."""
+    if logo.mode != "RGBA":
+        return False
+    alpha = logo.getchannel("A")
+    # Sample a grid; >2% non-opaque → treat as designed transparency
+    w, h = logo.size
+    step_x = max(1, w // 48)
+    step_y = max(1, h // 48)
+    transparent = total = 0
+    px = alpha.load()
+    for y in range(0, h, step_y):
+        for x in range(0, w, step_x):
+            total += 1
+            if px[x, y] < 240:
+                transparent += 1
+    return total > 0 and (transparent / total) > 0.02
+
+
 def _prepare_logo_rgba(logo_path: Path, opacity: float = 1.0) -> Image.Image:
-    """Load logo as RGBA and apply opacity; soft-knockout near-black/white solid backgrounds."""
+    """Load logo as RGBA; match Reels watermark prep (opacity once, smart knockout).
+
+    JPG/无透明通道时：仅当画面大面积近黑或近白才抠底，避免把白色 Logo 文字误抠成透明。
+    """
     with Image.open(logo_path) as im:
         logo = im.convert("RGBA")
-    pixels = logo.load()
-    w, h = logo.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = pixels[x, y]
-            if a < 8:
-                continue
-            if max(r, g, b) <= 18 or min(r, g, b) >= 248:
-                if abs(r - g) < 12 and abs(g - b) < 12:
-                    pixels[x, y] = (r, g, b, 0)
+    if not _logo_has_useful_alpha(logo):
+        pixels = logo.load()
+        w, h = logo.size
+        dark = bright = sampled = 0
+        step_x = max(1, w // 64)
+        step_y = max(1, h // 64)
+        for y in range(0, h, step_y):
+            for x in range(0, w, step_x):
+                r, g, b, _a = pixels[x, y]
+                lum = (r + g + b) // 3
+                sampled += 1
+                if lum <= 28:
+                    dark += 1
+                elif lum >= 250:
+                    bright += 1
+        knock_dark = sampled > 0 and (dark / sampled) >= 0.35
+        knock_bright = (not knock_dark) and sampled > 0 and (bright / sampled) >= 0.45
+        if knock_dark or knock_bright:
+            for y in range(h):
+                for x in range(w):
+                    r, g, b, a = pixels[x, y]
+                    if a < 8:
+                        continue
+                    lum = (r + g + b) // 3
+                    if knock_dark and lum <= 28:
+                        pixels[x, y] = (r, g, b, 0)
+                    elif knock_bright and lum >= 250:
+                        pixels[x, y] = (r, g, b, 0)
     if opacity < 0.999:
         r, g, b, a = logo.split()
         a = a.point(lambda v: int(v * max(0.0, min(1.0, opacity))))
@@ -91,6 +131,7 @@ def _corner_xy(position: str, base_w: int, base_h: int, mark_w: int, mark_h: int
 
 def _overlay_logo_on_image(base: Image.Image, logo_path: Path, cfg: dict) -> Image.Image:
     canvas = base.convert("RGBA")
+    # 图片导出路径只在 Pillow 侧应用一次不透明度（与 Reels/视频滤镜「预乘后不再二次 aa」对齐）
     opacity = max(0.05, min(1.0, float(cfg.get("opacity", 100)) / 100.0))
     logo = _prepare_logo_rgba(logo_path, opacity)
     mode = str(cfg.get("mode") or "小 Logo 角标")
@@ -923,17 +964,24 @@ class MetadataWorker(QObject):
             except Exception:
                 logo_input = logo
 
+            # 与 Reels 一致：若 PNG 已在 _prepare_logo_rgba 里写好透明度，
+            # 滤镜里不要再 colorchannelmixer 叠一次（否则 90%×90% 看起来发灰发透）。
+            prepared_has_alpha = logo_input == prepared
+            if prepared_has_alpha:
+                wm_in = "[1:v]format=rgba[wmraw]"
+            else:
+                wm_in = f"[1:v]format=rgba,colorchannelmixer=aa={opacity:.3f}[wmraw]"
             if "全屏" in mode:
                 fc = (
                     f"[0:v]{v_prep}[base];"
-                    f"[1:v]format=rgba,colorchannelmixer=aa={opacity:.3f}[wmraw];"
+                    f"{wm_in};"
                     f"[wmraw][base]scale2ref=w=iw:h=ih[wm][base2];"
                     f"[base2][wm]overlay=0:0:format=auto:eof_action=repeat[vout]"
                 )
             else:
                 fc = (
                     f"[0:v]{v_prep}[base];"
-                    f"[1:v]format=rgba,colorchannelmixer=aa={opacity:.3f}[wmraw];"
+                    f"{wm_in};"
                     f"[wmraw][base]scale2ref=w=main_w*{width_pct:.4f}:h=ow/mdar[wm][base2];"
                     f"[base2][wm]overlay={ox}:{oy}:format=auto:eof_action=repeat[vout]"
                 )
