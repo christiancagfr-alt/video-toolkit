@@ -24,7 +24,10 @@ LanguageDetectionMethod=uilanguage
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Files]
-Source: "dist_folder\VideoToolkit\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+; ignoreversion: PyInstaller DLLs often lack PE version info; without this,
+; upgrades can leave mixed old/new Qt/PySide binaries and fail with
+; "DLL load failed while importing QtCore / 找不到指定的程序".
+Source: "dist_folder\VideoToolkit\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\视频工具合集"; Filename: "{app}\VideoToolkit.exe"
