@@ -198,6 +198,15 @@ PRESETS = {
         "position": "画面中间", "caption_mode": "自由文案动画（不对口型）",
         "free_animation": "持续向上滚动", "animation_speed": 120,
     },
+    # 可调进场/出场/横向位置的持续滚动（保留「上浮」不动）
+    "滚动字幕 · 自定义路径": {
+        "text": "#FFFFFF", "outline": "#1C1917", "highlight": "#FACC15", "outline_width": 4,
+        "effect": "outline", "font": "Arial", "font_size": 72, "line_length": 18,
+        "letter_spacing": 0, "line_spacing": 110, "margin_v": 520, "max_words": 12, "max_lines": 6,
+        "position": "画面中间", "caption_mode": "自由文案动画（不对口型）",
+        "free_animation": "自定义滚动", "animation_speed": 120,
+        "scroll_enter_y": 2000, "scroll_exit_y": -80, "scroll_x": 540,
+    },
     "双眼皮 经典红黄黑": {"text": "#FF0000", "outline": "#FFFF00", "highlight": "#111111", "outline_width": 3,
                            "effect": "double_outline", "font": "Arial", "font_size": 90, "line_length": 26,
                            "letter_spacing": -4, "line_spacing": 100, "margin_v": 500,
@@ -439,7 +448,41 @@ STATIC_BOLD_FONT_FILES = {
     "Libre Baskerville": "LibreBaskerville-Bold.ttf",
 }
 
-CAPTION_RENDERER_VERSION = 26  # Invalidate pre-fix renders: speech clock, blank gaps, diff anchors.
+CAPTION_RENDERER_VERSION = 27  # Custom credit-roll path + letter-spacing single apply (\fsp only).
+
+# Free-copy credit-roll animations: full-duration SRT, no per-page seconds, ASS \move.
+_CREDIT_ROLL_ANIMATIONS = frozenset({"持续向上滚动", "自定义滚动"})
+
+
+def is_credit_roll_animation(animation) -> bool:
+    return str(animation or "") in _CREDIT_ROLL_ANIMATIONS
+
+
+def credit_roll_path(settings, block_h: float = 0.0):
+    """Return (x, y_start, y_end) for credit-roll ASS/preview move.
+
+    「持续向上滚动」keeps the classic below→above path.
+    「自定义滚动」uses scroll_enter_y / scroll_exit_y / scroll_x (PlayRes 1080×1920).
+    """
+    anim = str(settings.get("free_animation") or "")
+    half = max(0.0, float(block_h or 0.0)) / 2.0
+    if anim == "自定义滚动":
+        x = _safe_float(settings.get("scroll_x"), 540.0)
+        y_start = _safe_float(settings.get("scroll_enter_y"), 2000.0)
+        y_end = _safe_float(settings.get("scroll_exit_y"), -80.0)
+        return (max(0.0, min(1080.0, x)), y_start, y_end)
+    # Default continuous roll: enter just below frame, exit just above.
+    y_start = 1920.0 + half + 36.0
+    y_end = -half - 36.0
+    return (540.0, y_start, y_end)
+
+
+def ass_letter_spacing_tag(spacing) -> str:
+    """Per-dialogue \\fsp only. Style Spacing must stay 0 to avoid double tracking."""
+    value = float(spacing or 0)
+    if abs(value) <= 0.01:
+        return ""
+    return fr"\fsp{value:.2f}"
 
 
 # Visual keys that must stay identical between batch snapshot / UI / export.
@@ -452,6 +495,7 @@ _BATCH_STYLE_VISUAL_KEYS = (
     "line_length", "line_width", "max_words", "max_lines",
     "highlight_padding", "highlight_padding_y", "animation_speed",
     "caption_mode", "free_animation",
+    "scroll_enter_y", "scroll_exit_y", "scroll_x",
 )
 
 
@@ -3261,7 +3305,9 @@ def free_caption_srt(text, duration, settings):
         return ""
     if "-->" in value:
         return normalize_subtitle_text(value, language=lang)
-    if settings.get("free_animation") in ("整段固定", "持续向上滚动"):
+    if settings.get("free_animation") == "整段固定" or is_credit_roll_animation(
+        settings.get("free_animation")
+    ):
         available = max(.5, float(duration))
         milliseconds = round(available * 1000)
         hours, remainder = divmod(milliseconds, 3_600_000)
@@ -4367,13 +4413,13 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Base,{font},{render_settings['font_size']},{text_color},{text_color},{outline_color},&H90000000,{bold_flag},0,0,0,100,100,{spacing},0,1,{render_settings['outline_width']},2,{alignment},40,40,{render_settings['margin_v']},1
-Style: DoubleOuter,{font},{render_settings['font_size']},{highlight},{highlight},{highlight},&H90000000,{bold_flag},0,0,0,100,100,{spacing},0,1,{render_settings['outline_width'] + 3},2,{alignment},40,40,{render_settings['margin_v']},1
-Style: Active,{font},{render_settings['font_size']},{active_text_color},{active_text_color},&H00000000,&H00000000,{bold_flag},0,0,0,100,100,{spacing},0,1,0,0,{alignment},40,40,{render_settings['margin_v']},1
-Style: DualActive,{font},{render_settings['font_size']},{active_text_color},{active_text_color},{outline_color},&H00000000,{bold_flag},0,0,0,100,100,{spacing},0,1,{render_settings['outline_width']},0,{alignment},40,40,{render_settings['margin_v']},1
-Style: ActiveColor,{font},{render_settings['font_size']},{highlight},{highlight},{outline_color},&H90000000,{bold_flag},0,0,0,100,100,{spacing},0,1,{render_settings['outline_width']},2,{alignment},40,40,{render_settings['margin_v']},1
-Style: HighlightBox,{font},{render_settings['font_size']},{highlight},{highlight},{highlight},{highlight},{bold_flag},0,0,0,100,100,{spacing},0,1,0,0,7,0,0,0,1
-Style: BaseBox,{font},{render_settings['font_size']},{background_color},{background_color},{background_color},{background_color},{bold_flag},0,0,0,100,100,{spacing},0,1,0,0,7,0,0,0,1
+Style: Base,{font},{render_settings['font_size']},{text_color},{text_color},{outline_color},&H90000000,{bold_flag},0,0,0,100,100,0,0,1,{render_settings['outline_width']},2,{alignment},40,40,{render_settings['margin_v']},1
+Style: DoubleOuter,{font},{render_settings['font_size']},{highlight},{highlight},{highlight},&H90000000,{bold_flag},0,0,0,100,100,0,0,1,{render_settings['outline_width'] + 3},2,{alignment},40,40,{render_settings['margin_v']},1
+Style: Active,{font},{render_settings['font_size']},{active_text_color},{active_text_color},&H00000000,&H00000000,{bold_flag},0,0,0,100,100,0,0,1,0,0,{alignment},40,40,{render_settings['margin_v']},1
+Style: DualActive,{font},{render_settings['font_size']},{active_text_color},{active_text_color},{outline_color},&H00000000,{bold_flag},0,0,0,100,100,0,0,1,{render_settings['outline_width']},0,{alignment},40,40,{render_settings['margin_v']},1
+Style: ActiveColor,{font},{render_settings['font_size']},{highlight},{highlight},{outline_color},&H90000000,{bold_flag},0,0,0,100,100,0,0,1,{render_settings['outline_width']},2,{alignment},40,40,{render_settings['margin_v']},1
+Style: HighlightBox,{font},{render_settings['font_size']},{highlight},{highlight},{highlight},{highlight},{bold_flag},0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: BaseBox,{font},{render_settings['font_size']},{background_color},{background_color},{background_color},{background_color},{bold_flag},0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -4464,10 +4510,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 display = prepare_ass_dialogue_text(row["text"], lang)
                 events.append(f"Dialogue: {caption_layer + 1},{ass_time(start)},{ass_time(end)},Base,,0,0,0,,{override}{display}")
             continue
-        # True credit-style roll: keep the whole free-copy block and move it from
-        # below the frame to above it for the full clip duration.  The previous
-        # "由下向上" option is intentionally retained as a short entrance motion.
-        if free_mode and free_animation == "持续向上滚动":
+        # True credit-style roll: keep the whole free-copy block and move it
+        # for the full clip duration. 「持续向上滚动」= fixed below→above;
+        # 「自定义滚动」= user enter_y / exit_y / scroll_x. 「由下向上」 stays
+        # as a short per-page entrance motion elsewhere.
+        if free_mode and is_credit_roll_animation(free_animation):
             logical_lines = wrap_caption(
                 safe, max(6, int(render_settings.get("line_length", 18)))
             ).split(r"\N")
@@ -4478,10 +4525,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 continue
             line_scale = max(0.75, min(2.0, _safe_float(render_settings.get("line_spacing"), 100) / 100.0))
             block_h = max(float(font_size), len(logical_lines) * float(font_size) * 1.25 * line_scale)
-            y_start = 1920.0 + block_h / 2.0 + 36.0
-            y_end = -block_h / 2.0 - 36.0
+            scroll_x, y_start, y_end = credit_roll_path(render_settings, block_h)
             travel_ms = max(300, int(round(max(0.3, end - start) * 1000)))
-            override = fr"{{\an5\move(540,{y_start:.1f},540,{y_end:.1f},0,{travel_ms})}}"
+            fsp = ass_letter_spacing_tag(spacing)
+            override = (
+                fr"{{\an5\move({scroll_x:.1f},{y_start:.1f},"
+                fr"{scroll_x:.1f},{y_end:.1f},0,{travel_ms}){fsp}}}"
+            )
             if preset["effect"] == "double_outline":
                 events.append(
                     f"Dialogue: {caption_layer},{ass_time(start)},{ass_time(end)},"
@@ -4502,7 +4552,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if should_disable_word_highlight(safe, lang, allow_rtl_word_highlight=allow_rtl_words):
             display = prepare_ass_dialogue_text(safe, lang).replace("\n", r"\N")
             an = {"底部": 2, "画面中间": 5, "顶部": 8}.get(position, 2)
-            override = fr"{{\an{an}\fad(70,70)}}"
+            fsp = ass_letter_spacing_tag(spacing)
+            override = fr"{{\an{an}{fsp}\fad(70,70)}}"
             if preset["effect"] == "double_outline":
                 events.append(
                     f"Dialogue: {caption_layer},{ass_time(start)},{ass_time(end)},"
@@ -4616,9 +4667,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         draw = prepare_ass_dialogue_text(item["token"], lang) if rtl_token_mode else item["token"]
                         size = int(item.get("size") or font_size)
                         x, y = geo["x"], geo["y"]
+                        fsp = ass_letter_spacing_tag(spacing)
                         # 透明底稿不渲染；只在朗读时刻弹出到最终位置
                         override = (
-                            fr"{{\an5\pos({x:.1f},{y:.1f})\fs{size}"
+                            fr"{{\an5\pos({x:.1f},{y:.1f})\fs{size}{fsp}"
                             fr"\fscx90\fscy90"
                             fr"\t(0,{pop_ms},\fscx108\fscy108)"
                             fr"\t({pop_ms},{pop_ms + 45},\fscx100\fscy100)"
@@ -4639,7 +4691,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                             if karaoke_end > karaoke_start + 0.02:
                                 punch = max(45, min(130, int(animation_ms)))
                                 active_override = (
-                                    fr"{{\an5\pos({x:.1f},{y:.1f})\fs{size}"
+                                    fr"{{\an5\pos({x:.1f},{y:.1f})\fs{size}{fsp}"
                                     fr"\fscx78\fscy78"
                                     fr"\t(0,{punch},\fscx118\fscy118)"
                                     fr"\t({punch},{punch + 55},\fscx100\fscy100)"
@@ -4680,22 +4732,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     draw = prepare_ass_dialogue_text(token, lang) if rtl_token_mode else token
                     if free_mode:
                         visible_start = page_start
-                        override = fr"{{\an5\pos({x:.1f},{y:.1f})}}"
+                        fsp = ass_letter_spacing_tag(spacing)
+                        override = fr"{{\an5\pos({x:.1f},{y:.1f}){fsp}}}"
                         if free_animation == "整段固定":
                             # 静态段落：整页同时显示，无跟读高亮/逐词动画
                             visible_start = page_start
-                            override = fr"{{\an5\pos({x:.1f},{y:.1f})}}"
+                            override = fr"{{\an5\pos({x:.1f},{y:.1f}){fsp}}}"
                         elif free_animation == "逐字出现":
                             visible_start = token_start
-                            override = (fr"{{\an5\pos({x:.1f},{y:.1f})\fscx70\fscy70"
+                            override = (fr"{{\an5\pos({x:.1f},{y:.1f}){fsp}\fscx70\fscy70"
                                         fr"\t(0,{animation_ms},\fscx100\fscy100)\fad(80,80)}}")
                         elif free_animation == "逐行出现":
                             visible_start = page_start + (page_end-page_start) * line_index / max(3,len(page_lines)+1)
-                            override = fr"{{\an5\pos({x:.1f},{y:.1f})\fad(180,100)}}"
+                            override = fr"{{\an5\pos({x:.1f},{y:.1f}){fsp}\fad(180,100)}}"
                         elif free_animation == "由下向上":
-                            override = fr"{{\an5\move({x:.1f},{y+70:.1f},{x:.1f},{y:.1f},0,{max(220,animation_ms*2)})\fad(160,120)}}"
+                            override = fr"{{\an5\move({x:.1f},{y+70:.1f},{x:.1f},{y:.1f},0,{max(220,animation_ms*2)}){fsp}\fad(160,120)}}"
                         elif free_animation == "淡入淡出":
-                            override = fr"{{\an5\pos({x:.1f},{y:.1f})\fad(320,320)}}"
+                            override = fr"{{\an5\pos({x:.1f},{y:.1f}){fsp}\fad(320,320)}}"
                         # 自由文案一律只输出 Base 层（无 Highlight 跟读）
                         if effect == "double_outline":
                             events.append(
@@ -4709,8 +4762,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                                 f"Dialogue: {caption_layer},{ass_time(visible_start)},{ass_time(page_end)},"
                                 f"Base,,0,0,0,,{override}{draw}")
                         continue
-                    # \fsp 与 Style Spacing 双写：部分 libass 版本对逐词 Dialogue 不继承 Style Spacing
-                    fsp = fr"\fsp{spacing:.2f}" if abs(float(spacing or 0)) > 0.01 else ""
+                    # 字距只走 Dialogue \fsp；Style Spacing 固定为 0，避免 libass 双倍拉开
+                    fsp = ass_letter_spacing_tag(spacing)
                     intro=fr"{{\an5\pos({x:.1f},{y:.1f}){fsp}\fad(70,70)}}"
                     if effect == "glow": intro=fr"{{\an5\pos({x:.1f},{y:.1f}){fsp}\blur3\fad(70,70)}}"
                     if effect == "double_outline":
@@ -5380,7 +5433,7 @@ class CaptionWorker(QObject):
                         if (
                             (
                                 video_settings.get("caption_mode") == "自由文案动画（不对口型）"
-                                and video_settings.get("free_animation") == "持续向上滚动"
+                                and is_credit_roll_animation(video_settings.get("free_animation"))
                             )
                             or long_clip
                         ):
@@ -8404,11 +8457,33 @@ class DynamicCaptionPage(QWidget):
         self.caption_mode.setToolTip("语音同步会提取词级时间轴；自由文案按固定时长分页，不要求与人物口型一致。")
         self.caption_mode.currentTextChanged.connect(self._caption_mode_changed)
         self.free_animation=QComboBox(); self.free_animation.addItems([
-            "逐字出现", "逐行出现", "由下向上", "持续向上滚动", "淡入淡出", "整段固定"
+            "逐字出现", "逐行出现", "由下向上", "持续向上滚动", "自定义滚动", "淡入淡出", "整段固定"
         ])
         self.free_animation.currentTextChanged.connect(self._free_animation_changed)
         self.free_page_seconds=QSpinBox(); self.free_page_seconds.setRange(1,20); self.free_page_seconds.setValue(3); self.free_page_seconds.setSuffix(" 秒/屏")
         free_line=QHBoxLayout(); free_line.addWidget(self.free_animation,1); free_line.addWidget(self.free_page_seconds)
+        # 自定义滚动路径：进场 Y / 出场 Y / 横向 X（PlayRes 1080×1920）
+        self.scroll_enter_y=QSpinBox(); self.scroll_enter_y.setRange(-800, 2800); self.scroll_enter_y.setValue(2000); self.scroll_enter_y.setSuffix(" Y")
+        self.scroll_enter_y.setToolTip("字幕从画面何处进入（越大越靠下，默认在画框下方）")
+        self.scroll_exit_y=QSpinBox(); self.scroll_exit_y.setRange(-800, 2800); self.scroll_exit_y.setValue(-80); self.scroll_exit_y.setSuffix(" Y")
+        self.scroll_exit_y.setToolTip("字幕滚向何处离开（越小越靠上，默认在画框上方）")
+        self.scroll_x=QSpinBox(); self.scroll_x.setRange(0, 1080); self.scroll_x.setValue(540); self.scroll_x.setSuffix(" X")
+        self.scroll_x.setToolTip("滚动轨道的水平位置（540=画面正中）")
+        for spin, width in (
+            (self.scroll_enter_y, 110), (self.scroll_exit_y, 110), (self.scroll_x, 110),
+        ):
+            _configure_numeric_spin(spin, min_width=width)
+        self.custom_scroll_row=QWidget()
+        custom_scroll_layout=QHBoxLayout(self.custom_scroll_row)
+        custom_scroll_layout.setContentsMargins(0, 0, 0, 0)
+        custom_scroll_layout.setSpacing(6)
+        custom_scroll_layout.addWidget(QLabel("进场"))
+        custom_scroll_layout.addWidget(self.scroll_enter_y)
+        custom_scroll_layout.addWidget(QLabel("出场"))
+        custom_scroll_layout.addWidget(self.scroll_exit_y)
+        custom_scroll_layout.addWidget(QLabel("横向"))
+        custom_scroll_layout.addWidget(self.scroll_x)
+        self.custom_scroll_row.setVisible(False)
         self._load_saved_font_files()
         self.font=QComboBox(); self.font.addItems(QFontDatabase.families())
         if self.font.findText("Arial") < 0: self.font.insertItem(0,"Arial")
@@ -8618,6 +8693,7 @@ class DynamicCaptionPage(QWidget):
         compact_style_grid.setColumnStretch(1, 1)
         compact_style_grid.setColumnStretch(3, 1)
         style_controls_layout.addLayout(compact_style_grid)
+        style_controls_layout.addWidget(self.custom_scroll_row)
         style_controls_layout.addLayout(batch_style_row)
         style_controls_layout.addLayout(colors)
         style_controls_layout.addStretch()
@@ -13280,6 +13356,7 @@ class DynamicCaptionPage(QWidget):
         for control in (self.font_size, self.line_length, self.line_width, self.letter_spacing, self.word_spacing,
                         self.line_spacing, self.max_words, self.max_lines, self.highlight_padding, self.highlight_padding_y,
                         self.animation_speed, self.outline_width, self.margin_v, self.free_page_seconds,
+                        self.scroll_enter_y, self.scroll_exit_y, self.scroll_x,
                         self.original_volume, self.background_volume,self.audio_fade_in,self.audio_fade_out,
                         self.watermark_width, self.watermark_opacity, self.watermark_margin):
             control.valueChanged.connect(self._invalidate_live_style)
@@ -13642,6 +13719,7 @@ class DynamicCaptionPage(QWidget):
             "preset","base_preset","effect","font","font_size","caption_mode","free_animation","free_page_seconds",
             "line_length","line_width","letter_spacing","word_spacing","line_spacing","max_words","max_lines",
             "highlight_padding","highlight_padding_y","animation_speed","outline_width","position","margin_v",
+            "scroll_enter_y","scroll_exit_y","scroll_x",
             "text_color","outline_color","highlight_color","background_color","active_text_color","band_last_background","watermark_mode",
             "watermark_position","watermark_width","watermark_opacity","watermark_margin",
             "semantic_large_ratio","semantic_small_ratio","semantic_lead_ms","semantic_max_lines","semantic_small_words",
@@ -13686,7 +13764,9 @@ class DynamicCaptionPage(QWidget):
                    "highlight_padding":self.highlight_padding,"highlight_padding_y":self.highlight_padding_y,
                    "animation_speed":self.animation_speed,"outline_width":self.outline_width,
                    "margin_v":self.margin_v,"watermark_width":self.watermark_width,
-                   "watermark_opacity":self.watermark_opacity,"watermark_margin":self.watermark_margin}
+                   "watermark_opacity":self.watermark_opacity,"watermark_margin":self.watermark_margin,
+                   "scroll_enter_y":self.scroll_enter_y,"scroll_exit_y":self.scroll_exit_y,
+                   "scroll_x":self.scroll_x}
             keep_phrase_layout = self._current_has_word_timeline()
             for key,control in combos.items():
                 if key not in saved:
@@ -13948,7 +14028,10 @@ class DynamicCaptionPage(QWidget):
             "highlight_padding":self.highlight_padding.value(),"highlight_padding_y":self.highlight_padding_y.value(),
             "animation_speed":self.animation_speed.value(),
             "outline_width":self.outline_width.value(),"position":self.position.currentText(),
-            "margin_v":self.margin_v.value(),"audio_match_mode":self.audio_match_mode.currentText(),
+            "margin_v":self.margin_v.value(),
+            "scroll_enter_y":self.scroll_enter_y.value(),"scroll_exit_y":self.scroll_exit_y.value(),
+            "scroll_x":self.scroll_x.value(),
+            "audio_match_mode":self.audio_match_mode.currentText(),
             # 同时存内部三态 + UI 四选一文案，避免「原声＋BGM」被压成「保留原音」丢记忆
             "audio_mode": self._get_audio_mode_internal(),
             "audio_mode_ui": (
@@ -14314,6 +14397,7 @@ class DynamicCaptionPage(QWidget):
                "audio_fade_in_ms":self.audio_fade_in,"audio_fade_out_ms":self.audio_fade_out,
                "watermark_opacity":self.watermark_opacity,"watermark_margin":self.watermark_margin,
                "transition_duration":self.transition_duration,
+               "scroll_enter_y":self.scroll_enter_y,"scroll_exit_y":self.scroll_exit_y,"scroll_x":self.scroll_x,
                "voice_boost_pct": getattr(self, "voice_boost_pct", None),
                "grade_brightness": getattr(self, "grade_brightness", None),
                "grade_contrast": getattr(self, "grade_contrast", None),
@@ -15198,10 +15282,10 @@ class DynamicCaptionPage(QWidget):
         effect=preset["effect"]
         if (
             settings.get("caption_mode") == "自由文案动画（不对口型）"
-            and settings.get("free_animation") == "持续向上滚动"
+            and is_credit_roll_animation(settings.get("free_animation"))
         ):
             # Live preview counterpart of ASS \move: one stable text block travels
-            # continuously from below the 1080x1920 authoring canvas to above it.
+            # along credit_roll_path (classic below→above or custom enter/exit/x).
             wrapped = wrap_caption(
                 text, max(6, int(settings.get("line_length", 18)))
             ).split(r"\N")
@@ -15216,8 +15300,7 @@ class DynamicCaptionPage(QWidget):
             )
             line_h = max(float(font.pixelSize()), metrics.height()) * 1.25 * line_scale
             block_h = max(line_h, len(wrapped) * line_h)
-            start_y = 1920.0 + block_h / 2.0 + 36.0
-            end_y = -block_h / 2.0 - 36.0
+            scroll_x, start_y, end_y = credit_roll_path(settings, block_h)
             center_y = start_y + (end_y - start_y) * progress
             pen_width = max(1.0, float(settings.get("outline_width", 2)))
             for row, line in enumerate(wrapped):
@@ -15225,7 +15308,7 @@ class DynamicCaptionPage(QWidget):
                 baseline = center_y + (row - (len(wrapped) - 1) / 2.0) * line_h
                 baseline += metrics.ascent() / 2.0 - metrics.descent() / 2.0
                 path = QPainterPath()
-                path.addText((1080.0 - width) / 2.0, baseline, font, line)
+                path.addText(scroll_x - width / 2.0, baseline, font, line)
                 painter.setPen(QPen(
                     outline, pen_width * 2,
                     Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin,
@@ -16799,6 +16882,8 @@ class DynamicCaptionPage(QWidget):
                 "highlight_padding_y":self.highlight_padding_y.value(),
                 "animation_speed":self.animation_speed.value(),
                 "position":self.position.currentText(),"margin_v":self.margin_v.value(),
+                "scroll_enter_y":self.scroll_enter_y.value(),"scroll_exit_y":self.scroll_exit_y.value(),
+                "scroll_x":self.scroll_x.value(),
                 "audio_mode": self._get_audio_mode_internal(),
                 "audio_mode_ui": (
                     self.audio_mode.currentText() if hasattr(self, "audio_mode") else "视频原声"
@@ -17634,8 +17719,14 @@ class DynamicCaptionPage(QWidget):
         free = mode == "自由文案动画（不对口型）"
         self.free_animation.setEnabled(free)
         self.free_page_seconds.setEnabled(
-            free and self.free_animation.currentText() not in ("整段固定", "持续向上滚动")
+            free
+            and self.free_animation.currentText() != "整段固定"
+            and not is_credit_roll_animation(self.free_animation.currentText())
         )
+        if hasattr(self, "custom_scroll_row"):
+            self.custom_scroll_row.setVisible(
+                free and self.free_animation.currentText() == "自定义滚动"
+            )
         self.provider.setEnabled(not free); self.extract_timeline_btn.setEnabled(not free); self.extract_all_btn.setEnabled(not free)
         if free:
             self._load_current_free_text()
@@ -17645,14 +17736,23 @@ class DynamicCaptionPage(QWidget):
 
     def _free_animation_changed(self, animation):
         if hasattr(self, "free_page_seconds"):
-            uses_pages = animation not in ("整段固定", "持续向上滚动")
+            uses_pages = animation != "整段固定" and not is_credit_roll_animation(animation)
             self.free_page_seconds.setEnabled(
                 self.caption_mode.currentText() == "自由文案动画（不对口型）" and uses_pages)
-            self.free_page_seconds.setToolTip(
-                "持续向上滚动会让全部文案从画面底部匀速滚到顶部，不使用每屏秒数。"
-                if animation == "持续向上滚动" else
-                "整段固定会覆盖整个视频时长，不使用每屏秒数。" if animation == "整段固定" else
-                "自由文案分页动画中，每一屏字幕持续显示的时间。")
+            if animation == "自定义滚动":
+                tip = "自定义滚动：全部文案沿「进场→出场」匀速滚动，可调进场Y/出场Y/横向X，不使用每屏秒数。"
+            elif animation == "持续向上滚动":
+                tip = "持续向上滚动会让全部文案从画面底部匀速滚到顶部，不使用每屏秒数。"
+            elif animation == "整段固定":
+                tip = "整段固定会覆盖整个视频时长，不使用每屏秒数。"
+            else:
+                tip = "自由文案分页动画中，每一屏字幕持续显示的时间。"
+            self.free_page_seconds.setToolTip(tip)
+        if hasattr(self, "custom_scroll_row"):
+            self.custom_scroll_row.setVisible(
+                self.caption_mode.currentText() == "自由文案动画（不对口型）"
+                and animation == "自定义滚动"
+            )
         self._refresh_live_preview()
 
     def _group_words_for_current_layout(self, word_srt, return_fix_count=False):
@@ -20317,6 +20417,7 @@ class DynamicCaptionPage(QWidget):
             self.max_words, self.max_lines, self.highlight_padding,
             self.highlight_padding_y, self.animation_speed, self.outline_width,
             self.margin_v, self.position, self.caption_mode, self.free_animation,
+            self.scroll_enter_y, self.scroll_exit_y, self.scroll_x,
         ]
         # 已有词级轴：保留「每句词数/每行字符」，避免换预设把句切乱 → 跟读均分飞掉
         keep_phrase_layout = self._current_has_word_timeline()
@@ -20358,7 +20459,8 @@ class DynamicCaptionPage(QWidget):
             if "caption_mode" in preset and hasattr(self, "caption_mode"):
                 new_mode = preset["caption_mode"]
                 explicit_free = "自由文案" in str(new_mode) and (
-                    "滚动" in str(name) or preset.get("free_animation") == "持续向上滚动"
+                    "滚动" in str(name)
+                    or is_credit_roll_animation(preset.get("free_animation"))
                 )
                 if keep_phrase_layout and "自由文案" in str(new_mode) and not explicit_free:
                     pass
@@ -20367,7 +20469,7 @@ class DynamicCaptionPage(QWidget):
             if "free_animation" in preset and hasattr(self, "free_animation"):
                 explicit_free = (
                     "滚动" in str(name)
-                    or preset.get("free_animation") == "持续向上滚动"
+                    or is_credit_roll_animation(preset.get("free_animation"))
                 )
                 if (
                     keep_phrase_layout
@@ -20377,6 +20479,17 @@ class DynamicCaptionPage(QWidget):
                     pass
                 else:
                     self.free_animation.setCurrentText(preset["free_animation"])
+            if "scroll_enter_y" in preset:
+                self.scroll_enter_y.setValue(int(preset["scroll_enter_y"]))
+            if "scroll_exit_y" in preset:
+                self.scroll_exit_y.setValue(int(preset["scroll_exit_y"]))
+            if "scroll_x" in preset:
+                self.scroll_x.setValue(int(preset["scroll_x"]))
+            if hasattr(self, "custom_scroll_row"):
+                self.custom_scroll_row.setVisible(
+                    self.caption_mode.currentText() == "自由文案动画（不对口型）"
+                    and self.free_animation.currentText() == "自定义滚动"
+                )
             if hasattr(self, "preview_position_slider"):
                 self.preview_position_slider.blockSignals(True)
                 self.preview_position_slider.setValue(self.margin_v.value())
