@@ -86,7 +86,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.74").strip().lstrip("v") or "1.7.74"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.75").strip().lstrip("v") or "1.7.75"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -1390,7 +1390,7 @@ class TranscribeWorker(QObject):
                     vad_filter=use_vad,
                     word_timestamps=True,
                     condition_on_previous_text=False,
-                    without_speech_threshold=0.6,
+                    no_speech_threshold=0.6,
                     vad_parameters={
                         "min_silence_duration_ms": 350,
                         "speech_pad_ms": 120,
@@ -1443,43 +1443,72 @@ class TranscribeWorker(QObject):
                 return challenger
             return current
 
-        def _transcribe_long_chunked(model, wav_path, total_dur, *, use_vad=None):
-            """长音频/长文案：重叠分段识别再拼时间戳，避免整段截断与边界丢词。
+        def _merge_segment_windows(media_path, total_dur):
+            """若成品旁有分组合成 sidecar，按每段 8~10s 窗口切分识别。"""
+            try:
+                from modules.group_merge import (
+                    load_group_segments_map,
+                    try_rebuild_segments_sidecar,
+                )
+            except Exception:
+                return None
+            path = Path(media_path)
+            data = load_group_segments_map(path)
+            if not data:
+                try:
+                    try_rebuild_segments_sidecar(path)
+                except Exception:
+                    pass
+                data = load_group_segments_map(path)
+            if not data:
+                return None
+            segments = data.get("segments") or []
+            if len(segments) < 2:
+                return None
+            raw = [max(80, int(s.get("duration_ms") or 0)) for s in segments]
+            total_raw = sum(raw) or 1
+            total_ms = max(500, int(round(float(total_dur) * 1000)))
+            scale = total_ms / total_raw
+            windows = []
+            t_ms = 0
+            for i, seg in enumerate(segments):
+                if i < len(segments) - 1:
+                    dur = max(80, int(round(raw[i] * scale)))
+                else:
+                    dur = max(80, total_ms - t_ms)
+                name = str(seg.get("name") or f"段{i + 1:02d}")
+                windows.append({
+                    "start": t_ms / 1000.0,
+                    "end": (t_ms + dur) / 1000.0,
+                    "label": name,
+                })
+                t_ms += dur
+            return windows
 
-            旧实现用 ffmpeg segment 无重叠切片，却按 overlap 丢掉下一段开头词，
-            会在每 75s 边界制造缺口；合成成品再提取时时间轴更容易看起来「对不齐」。
-            """
+        def _transcribe_windows(model, wav_path, windows, *, use_vad=None, edge_pad=0.12):
+            """按给定时间窗切片识别并拼回成片时钟。"""
             import tempfile
             creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            # 略缩短单段、加大重叠：长口播/长文案更稳，边界词更不容易丢
-            chunk_len, overlap = 60.0, 3.0
-            step = max(40.0, chunk_len - overlap)
-            total_dur = max(0.5, float(total_dur or 0.5))
-            starts = []
-            cursor = 0.0
-            while cursor < total_dur - 0.4:
-                starts.append(cursor)
-                if cursor + chunk_len >= total_dur - 0.2:
-                    break
-                cursor += step
-            if not starts:
-                starts = [0.0]
-            chunk_dir = Path(tempfile.mkdtemp(prefix="vt_whisper_chunks_"))
-            _emit(
-                f"长音频（{total_dur:.0f}s）分段识别：每段约 {int(chunk_len)}s，"
-                f"重叠 {overlap:.0f}s，共 {len(starts)} 段…"
-            )
+            if not windows:
+                return None
+            total_end = max(float(w.get("end") or 0) for w in windows)
+            chunk_dir = Path(tempfile.mkdtemp(prefix="vt_whisper_seg_"))
             all_segs = []
             info = None
             try:
-                for i, offset in enumerate(starts):
+                for i, win in enumerate(windows):
                     if self.cancelled:
                         raise RuntimeError("任务已取消")
-                    this_len = min(chunk_len, max(0.5, total_dur - offset))
-                    chunk = chunk_dir / f"c_{i:04d}.wav"
+                    start = max(0.0, float(win.get("start") or 0))
+                    end = max(start + 0.2, float(win.get("end") or (start + 0.2)))
+                    # 轻微外扩，减少切点丢词；拼回时再裁到本窗
+                    ss = max(0.0, start - (edge_pad if i > 0 else 0.0))
+                    ee = min(total_end + 0.05, end + (edge_pad if i < len(windows) - 1 else 0.0))
+                    this_len = max(0.25, ee - ss)
+                    chunk = chunk_dir / f"s_{i:04d}.wav"
                     cmd = [
                         self.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-                        "-ss", f"{offset:.3f}", "-t", f"{this_len:.3f}",
+                        "-ss", f"{ss:.3f}", "-t", f"{this_len:.3f}",
                         "-i", str(wav_path), "-map", "0:a:0",
                         "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
                         str(chunk),
@@ -1488,34 +1517,46 @@ class TranscribeWorker(QObject):
                         cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                         creationflags=creation, text=True, encoding="utf-8", errors="replace",
                     )
-                    if proc.returncode != 0 or not chunk.is_file() or chunk.stat().st_size < 1000:
+                    if proc.returncode != 0 or not chunk.is_file() or chunk.stat().st_size < 800:
                         err = (proc.stderr or "")[-200:]
-                        _emit(f"分段 {i + 1} 抽取失败，回退整段识别：{err or 'unknown'}")
+                        _emit(f"片段 {i + 1} 抽取失败：{err or 'unknown'}")
                         return None
-                    try:
-                        chunk_dur = float(video_duration(self.ffmpeg_path, str(chunk)) or 0)
-                    except Exception:
-                        chunk_dur = 0.0
-                    if chunk_dur <= 0.05:
-                        chunk_dur = float(this_len)
+                    label = str(win.get("label") or f"段{i + 1}")
                     _emit(
-                        f"本地识别分段 {i + 1}/{len(starts)}"
-                        f"（起点 {offset:.0f}s，本段约 {chunk_dur:.0f}s）…"
+                        f"本地识别片段 {i + 1}/{len(windows)}「{label}」"
+                        f"（{start:.1f}–{end:.1f}s，约 {end - start:.1f}s）…"
                     )
                     segs, info = transcribe_file(
-                        model, chunk, offset=offset, use_vad=use_vad,
-                        label=f"[{i + 1}/{len(starts)}]",
+                        model, chunk, offset=ss, use_vad=use_vad,
+                        label=f"[{i + 1}/{len(windows)}]",
                     )
-                    # 重叠区保留前一段结果，丢掉本段落在 overlap 前半的词，避免重复/粘连
-                    if all_segs and i > 0 and overlap > 0:
-                        cut = offset + overlap * 0.5
-                        segs = [s for s in segs if float(s.get("start") or 0) >= cut]
-                        for s in segs:
-                            s["words"] = [
-                                w for w in (s.get("words") or [])
-                                if float(w.get("start") or 0) >= cut
-                            ]
-                    all_segs.extend(segs)
+                    # 只保留落在本窗内的词/句，避免外扩区重复
+                    kept = []
+                    for s in segs or []:
+                        words = [
+                            w for w in (s.get("words") or [])
+                            if start - 1e-3 <= float(w.get("start") or 0) < end + 1e-3
+                        ]
+                        if words:
+                            s = dict(s)
+                            s["words"] = words
+                            s["start"] = float(words[0].get("start") or start)
+                            s["end"] = float(words[-1].get("end") or end)
+                            s["text"] = " ".join(
+                                str(w.get("word") or w.get("text") or "").strip()
+                                for w in words
+                            ).strip() or str(s.get("text") or "")
+                            kept.append(s)
+                        else:
+                            seg_start = float(s.get("start") or 0)
+                            seg_end = float(s.get("end") or 0)
+                            if seg_end <= start + 1e-3 or seg_start >= end - 1e-3:
+                                continue
+                            s = dict(s)
+                            s["start"] = max(start, seg_start)
+                            s["end"] = min(end, seg_end)
+                            kept.append(s)
+                    all_segs.extend(kept)
             finally:
                 try:
                     shutil.rmtree(chunk_dir, ignore_errors=True)
@@ -1525,6 +1566,55 @@ class TranscribeWorker(QObject):
                 return None
             return all_segs, info
 
+        def _transcribe_long_chunked(model, wav_path, total_dur, *, use_vad=None):
+            """长音频/长文案：重叠短窗识别再拼时间戳，避免整段截断与边界丢词。
+
+            默认约 30s 窗、4s 重叠：比旧 60s 窗更稳，长口播漏句更少。
+            分组合成成品若有 sidecar，优先走「按合成片段」识别。
+            """
+            total_dur = max(0.5, float(total_dur or 0.5))
+            # sidecar 在成片旁；临时 16k wav 无 sidecar，优先用原始媒体路径
+            merge_windows = None
+            for candidate in (Path(audio), Path(wav_path)):
+                merge_windows = _merge_segment_windows(candidate, total_dur)
+                if merge_windows:
+                    break
+            if merge_windows is not None:
+                _emit(
+                    f"按合成片段识别：共 {len(merge_windows)} 段"
+                    f"（成品约 {total_dur:.0f}s，逐段约 "
+                    f"{(merge_windows[0]['end'] - merge_windows[0]['start']):.0f}s）…"
+                )
+                return _transcribe_windows(
+                    model, wav_path, merge_windows, use_vad=use_vad,
+                )
+
+            chunk_len, overlap = 30.0, 4.0
+            step = max(20.0, chunk_len - overlap)
+            starts = []
+            cursor = 0.0
+            while cursor < total_dur - 0.35:
+                starts.append(cursor)
+                if cursor + chunk_len >= total_dur - 0.15:
+                    break
+                cursor += step
+            if not starts:
+                starts = [0.0]
+            windows = []
+            for offset in starts:
+                windows.append({
+                    "start": offset,
+                    "end": min(total_dur, offset + chunk_len),
+                    "label": f"{offset:.0f}s",
+                })
+            _emit(
+                f"长音频（{total_dur:.0f}s）分段识别：每段约 {int(chunk_len)}s，"
+                f"重叠 {overlap:.0f}s，共 {len(windows)} 段…"
+            )
+            return _transcribe_windows(
+                model, wav_path, windows, use_vad=use_vad, edge_pad=overlap * 0.5,
+            )
+
         try:
             import shutil
             _emit(
@@ -1532,8 +1622,10 @@ class TranscribeWorker(QObject):
                 f"（设备 {self._local_device}，模型 {getattr(self, '_local_model_name', '?')}）"
             )
             segments, info = None, None
-            # ≥60s 即分段：中长文案/口播不必等满 90s 才走片段读取
-            if audio_dur >= 60 and prep_wav is not None:
+            # 有合成 sidecar 时不论长短都按片段识别；否则 ≥45s 走 30s 短窗
+            merge_hint = _merge_segment_windows(audio, audio_dur)
+            use_chunked = merge_hint is not None or audio_dur >= 45
+            if use_chunked:
                 chunked = _transcribe_long_chunked(self._local_model, asr_audio, audio_dur)
                 if chunked is not None:
                     segments, info = chunked
@@ -1551,11 +1643,7 @@ class TranscribeWorker(QObject):
                 )
                 if _pick_better_segments(segments, segments2, audio_dur) is segments2:
                     segments, info = segments2, info2
-                if (
-                    audio_dur >= 60
-                    and prep_wav is not None
-                    and not _word_density_ok(segments, audio_dur)
-                ):
+                if use_chunked and not _word_density_ok(segments, audio_dur):
                     _emit("关 VAD 后覆盖仍不足，强制再跑一遍分段识别…")
                     chunked3 = _transcribe_long_chunked(
                         self._local_model, asr_audio, audio_dur, use_vad=False,

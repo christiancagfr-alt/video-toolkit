@@ -3804,6 +3804,27 @@ def align_source_text_to_srt_cues(events, source_text):
     return result
 
 
+def sanitize_proofread_paste(text: str) -> str:
+    """清理校对粘贴：BOM/零宽字符，并尝试修复 UTF-8 被当 Latin-1 的乱码。"""
+    value = str(text or "")
+    for ch in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u2060"):
+        value = value.replace(ch, "")
+    value = value.replace("\xa0", " ")
+    # 典型 mojibake：UTF-8 希腊/拉丁被按 latin1/cp1252 读出（含 Ã© Î± 等）
+    if re.search(r"Ã.|Â.|Î.|Ï.|Ð.|Ñ.", value):
+        for enc in ("latin1", "cp1252"):
+            try:
+                fixed = value.encode(enc).decode("utf-8")
+            except Exception:
+                continue
+            if fixed and fixed != value:
+                # 修复后应含更多正常字母、更少替换符
+                if fixed.count("\ufffd") <= value.count("\ufffd"):
+                    value = fixed
+                    break
+    return value
+
+
 def proofread_srt_keep_timestamps(srt, source_text, language=None):
     """Replace cue texts with aligned source script; keep all timestamps.
 
@@ -3813,6 +3834,7 @@ def proofread_srt_keep_timestamps(srt, source_text, language=None):
     events = parse_srt(srt, language=language)
     if not events or not str(source_text or "").strip():
         return srt, []
+    source_text = sanitize_proofread_paste(source_text)
     cleaned = normalize_subtitle_text(str(source_text).strip(), language=language) if language else str(source_text).strip()
     cleaned = normalize_required_capitalization(cleaned)
     new_texts = align_source_text_to_srt_cues(events, cleaned)
@@ -7033,7 +7055,8 @@ class BatchScriptProofreadDialog(QDialog):
     def paste_scripts(self):
         try:
             assignments = batch_script_paste_assignments(
-                QApplication.clipboard().text(), self.rows, self.paste_mode.currentData(),
+                sanitize_proofread_paste(QApplication.clipboard().text()),
+                self.rows, self.paste_mode.currentData(),
                 max(0, self.table.currentRow()))
         except Exception as exc:
             QMessageBox.warning(self, "无法批量粘贴", str(exc))
@@ -7117,11 +7140,19 @@ class ScriptProofreadDialog(QDialog):
         root.setSpacing(8)
         tip = QLabel(
             "左侧为识别出的字幕（带时间）；右侧粘贴无时间戳的原文案。\n"
-            "点击「对比预览」后，差异处用红色标出。提交替换只改文字，时间戳仍用音频识别结果。"
+            "点击「对比预览」后，差异处用红色标出。提交替换只改文字，时间戳仍用音频识别结果。\n"
+            "希腊语/多文种请用 UTF-8 原文粘贴；书写语言选对后「重新提取」可减少识别乱码。"
         )
         tip.setWordWrap(True)
         tip.setStyleSheet("color:#7dd3fc;padding:4px;")
         root.addWidget(tip)
+
+        # Consolas 缺希腊语字形时会串格；优先 Segoe UI / Arial
+        _proof_font = (
+            "QTextBrowser, QPlainTextEdit {"
+            " font-family: 'Segoe UI','Arial','Tahoma','Microsoft YaHei UI',sans-serif;"
+            " font-size: 13px; }"
+        )
 
         split = QSplitter(Qt.Orientation.Horizontal)
 
@@ -7131,9 +7162,7 @@ class ScriptProofreadDialog(QDialog):
         left_l.addWidget(QLabel("① 提取字幕（只读）"))
         self.extracted_view = QTextBrowser()
         self.extracted_view.setOpenExternalLinks(False)
-        self.extracted_view.setStyleSheet(
-            "QTextBrowser { font-family: Consolas,'Microsoft YaHei UI'; font-size: 12px; }"
-        )
+        self.extracted_view.setStyleSheet(_proof_font)
         left_l.addWidget(self.extracted_view, 1)
         split.addWidget(left)
 
@@ -7145,11 +7174,10 @@ class ScriptProofreadDialog(QDialog):
         self.source_edit.setPlaceholderText(
             "在此粘贴完整正确文案……\n支持整段或按句换行；无需 00:00:00 --> 时间轴。"
         )
-        self.source_edit.setStyleSheet(
-            "QPlainTextEdit { font-family: Consolas,'Microsoft YaHei UI'; font-size: 12px; }"
-        )
+        self.source_edit.setStyleSheet(_proof_font)
+        self.source_edit.installEventFilter(self)
         if preset_source:
-            self.source_edit.setPlainText(preset_source)
+            self.source_edit.setPlainText(sanitize_proofread_paste(preset_source))
         right_l.addWidget(self.source_edit, 1)
         split.addWidget(right)
         split.setStretchFactor(0, 1)
@@ -7170,9 +7198,7 @@ class ScriptProofreadDialog(QDialog):
         self.diff_view = QTextBrowser()
         self.diff_view.setOpenExternalLinks(False)
         self.diff_view.setMinimumHeight(160)
-        self.diff_view.setStyleSheet(
-            "QTextBrowser { font-family: Consolas,'Microsoft YaHei UI'; font-size: 12px; }"
-        )
+        self.diff_view.setStyleSheet(_proof_font)
         root.addWidget(self.diff_view, 2)
 
         root.addWidget(QLabel("④ 校对后 SRT 预览（时间戳未改）"))
@@ -7180,7 +7206,7 @@ class ScriptProofreadDialog(QDialog):
         self.result_view.setReadOnly(True)
         self.result_view.setMinimumHeight(120)
         self.result_view.setStyleSheet(
-            "QPlainTextEdit { font-family: Consolas,'Microsoft YaHei UI'; font-size: 11px; color:#cbd5e1; }"
+            _proof_font + " QPlainTextEdit { color:#cbd5e1; font-size: 12px; }"
         )
         root.addWidget(self.result_view, 1)
 
@@ -7197,6 +7223,17 @@ class ScriptProofreadDialog(QDialog):
 
         self._fill_extracted_readonly()
         self.source_edit.textChanged.connect(self._on_source_changed)
+
+    def eventFilter(self, obj, event):
+        # 粘贴时清洗 BOM / UTF-8 乱码，避免希腊语等变成 Ã© / Î±
+        if obj is getattr(self, "source_edit", None) and event.type() == QEvent.Type.KeyPress:
+            if event.matches(QKeySequence.StandardKey.Paste):
+                clip = QApplication.clipboard().text()
+                if clip:
+                    cur = self.source_edit.textCursor()
+                    cur.insertText(sanitize_proofread_paste(clip))
+                    return True
+        return super().eventFilter(obj, event)
 
     def _fill_extracted_readonly(self):
         events = parse_srt(self._timeline_srt, language=self._language)
@@ -7228,7 +7265,9 @@ class ScriptProofreadDialog(QDialog):
             self.summary_label.setStyleSheet("color:#fbbf24;")
 
     def _run_compare(self):
-        source = self.source_edit.toPlainText().strip()
+        source = sanitize_proofread_paste(self.source_edit.toPlainText()).strip()
+        if source != self.source_edit.toPlainText():
+            self.source_edit.setPlainText(source)
         if not source:
             QMessageBox.information(self, "没有原文案", "请先在右侧粘贴无时间戳的原文案。")
             return
@@ -9179,7 +9218,7 @@ class DynamicCaptionPage(QWidget):
         self.timeline_source_label=QLabel("当前字幕：尚未选择视频")
         self.timeline_source_label.setStyleSheet("color:#facc15;background:#111827;padding:5px 7px;border-radius:4px;")
         self.timeline_source_label.setWordWrap(True); revise_layout.addWidget(self.timeline_source_label)
-        timeline_actions=QHBoxLayout(); self.extract_timeline_btn=QPushButton("重新提取"); self.extract_timeline_btn.setToolTip("重新提取当前选中素材的字幕时间轴"); self.extract_timeline_btn.setObjectName("primary"); self.extract_timeline_btn.clicked.connect(self.extract_timeline)
+        timeline_actions=QHBoxLayout(); self.extract_timeline_btn=QPushButton("重新提取"); self.extract_timeline_btn.setToolTip("重新提取当前选中素材的字幕时间轴。\n分组合成成品会按每段小视频识别再拼接；其它长片约按 30s 短窗重叠识别。\n希腊语等请先选对「书写语言/识别语言」。"); self.extract_timeline_btn.setObjectName("primary"); self.extract_timeline_btn.clicked.connect(self.extract_timeline)
         self.extract_all_btn=QPushButton("批量提取"); self.extract_all_btn.setToolTip("批量提取任务列表中全部素材的字幕时间轴"); self.extract_all_btn.setStyleSheet("QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #059669); border-color: #34d399; color: white; font-weight: 700; } QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #34d399, stop:1 #10b981); }"); self.extract_all_btn.clicked.connect(self.extract_all_timelines)
         self.reextract_after_cut_btn = QPushButton("裁剪后重提")
         self.reextract_after_cut_btn.setToolTip(
@@ -9223,9 +9262,12 @@ class DynamicCaptionPage(QWidget):
         self.override_text.textChanged.connect(self._timeline_text_changed)
         caption_edit_tabs=QTabWidget(); caption_edit_tabs.addTab(self.override_text,"时间轴与字幕")
         proofread_page=QWidget(); proofread_layout=QVBoxLayout(proofread_page); proofread_layout.setContentsMargins(4,4,4,4)
-        proofread_hint=QLabel("粘贴正确的源文案，只校对文字内容；识别得到的时间戳与对口型节奏保持不变。")
+        proofread_hint=QLabel("粘贴正确的源文案，只校对文字内容；识别得到的时间戳与对口型节奏保持不变。长视频请先「重新提取」（合成片按小片段识别）。希腊语等请用 UTF-8 原文，并选对书写语言。")
         proofread_hint.setWordWrap(True); proofread_hint.setStyleSheet("color:#7dd3fc;")
         self.source_proofread=QPlainTextEdit(); self.source_proofread.setPlaceholderText("粘贴完整源文案，不需要时间戳…")
+        self.source_proofread.setStyleSheet(
+            "QPlainTextEdit { font-family: 'Segoe UI','Arial','Tahoma','Microsoft YaHei UI',sans-serif; font-size: 13px; }"
+        )
         apply_proofread=QPushButton("应用校对"); apply_proofread.setToolTip("按源文案校对字幕文字并保留原时间戳"); apply_proofread.setObjectName("primary"); apply_proofread.clicked.connect(self._apply_source_proofread)
         proofread_layout.addWidget(proofread_hint); proofread_layout.addWidget(self.source_proofread,1); proofread_layout.addWidget(apply_proofread)
         caption_edit_tabs.addTab(proofread_page,"源文案校对")
@@ -19080,7 +19122,10 @@ class DynamicCaptionPage(QWidget):
 
     def _apply_source_proofread(self):
         """Legacy tab path：无对比弹窗，直接按源文案覆盖（仍保留时间戳）。"""
-        source_copy = self.source_proofread.toPlainText().strip() if hasattr(self, "source_proofread") else ""
+        raw = self.source_proofread.toPlainText() if hasattr(self, "source_proofread") else ""
+        source_copy = sanitize_proofread_paste(raw).strip()
+        if hasattr(self, "source_proofread") and source_copy != raw.strip():
+            self.source_proofread.setPlainText(source_copy)
         if not source_copy:
             self._open_script_proofread_dialog()
             return
