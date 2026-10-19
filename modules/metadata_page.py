@@ -178,13 +178,14 @@ def crop_image_to_916(image: Image.Image, target_size=None) -> Image.Image:
 
 def _probe_video_meta(ffmpeg, path: Path):
     """Return width, height, fps, video_bit_rate (bps, 0 if unknown)."""
-    ffprobe = find_media_tool("ffprobe")
+    sibling = Path(ffmpeg).with_name("ffprobe" + Path(ffmpeg).suffix)
+    ffprobe = str(sibling) if sibling.is_file() else find_media_tool("ffprobe")
     if not ffprobe:
         return 0, 0, 0.0, 0
     command = [
-        ffprobe, "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,bit_rate",
-        "-show_entries", "format=bit_rate",
+        ffprobe, "-v", "error",
+        "-show_entries", "stream=codec_type,width,height,r_frame_rate,avg_frame_rate,bit_rate",
+        "-show_entries", "format=bit_rate,duration,size",
         "-of", "json", str(path),
     ]
     result = subprocess.run(
@@ -194,7 +195,8 @@ def _probe_video_meta(ffmpeg, path: Path):
         return 0, 0, 0.0, 0
     try:
         payload = json.loads(result.stdout or "{}")
-        stream = (payload.get("streams") or [{}])[0]
+        streams = payload.get("streams") or []
+        stream = next((s for s in streams if s.get("codec_type") == "video"), {})
         fmt = payload.get("format") or {}
         w = int(stream.get("width") or 0)
         h = int(stream.get("height") or 0)
@@ -213,7 +215,12 @@ def _probe_video_meta(ffmpeg, path: Path):
             br = 0
         if br <= 0:
             try:
-                br = int(fmt.get("bit_rate") or 0)
+                total_br = int(fmt.get("bit_rate") or 0)
+                if total_br <= 0 and float(fmt.get("duration") or 0) > 0:
+                    total_br = int(float(fmt.get("size") or path.stat().st_size) * 8 / float(fmt["duration"]))
+                audio_br = sum(int(s.get("bit_rate") or 0) for s in streams
+                               if s.get("codec_type") == "audio" and str(s.get("bit_rate") or "0").isdigit())
+                br = max(0, total_br - audio_br)
             except (TypeError, ValueError):
                 br = 0
         return w, h, fps, max(0, br)
@@ -226,70 +233,46 @@ def _probe_video_size(ffmpeg, path: Path):
     return w, h, fps
 
 
-def _bitrate_floor_for_size(width: int, height: int) -> int:
-    """Minimum video bitrate (bps) for clean 9:16 delivery at given pixels."""
-    pixels = max(1, int(width) * int(height))
-    # ~0.12 bit/pixel/frame @ 30fps ≈ 3.6 bpp-ish overall; clamp to sensible range
-    # 1080x1920 → ~8 Mbps floor; 720x1280 → ~4.5; tiny 270x480 → ~1.2
-    floor = int(pixels * 30 * 0.12)
-    return max(1_200_000, min(16_000_000, floor))
-
-
 def _hq_video_encode_args(ffmpeg, width: int = 0, height: int = 0, source_bitrate: int = 0) -> tuple[list, str]:
-    """成品级 H.264：在肉眼难辨的前提下优先速度。
-
-    策略（相对 1.7.45 偏快档略回调画质）：
-    - CPU：medium + CRF14（接近旧 slow/CRF14 观感，仍比 slow 快）
-    - NVENC：p5 + CQ15
-    - QSV/AMF：质量档 + 码率下限
-    返回 (ffmpeg_args, 简短说明)
-    """
+    """Use the source bitrate budget; quality controls must not force inflation."""
     encoder = resolve_encoder(ffmpeg, "auto")
-    w = max(0, int(width or 0))
-    h = max(0, int(height or 0))
-    floor = _bitrate_floor_for_size(w or 1080, h or 1920)
-    # 源码率更高时尽量贴近源，减少二次压缩损失
-    target_br = max(floor, int(source_bitrate * 0.95) if source_bitrate > 500_000 else floor)
-    maxrate = int(target_br * 1.5)
-    bufsize = int(target_br * 2)
-
+    pixels = max(1, int(width or 1080) * int(height or 1920))
+    # Only estimate when the source rate cannot be measured. A 1080p source at
+    # 1 Mbps must not be forced to the previous ~7.5 Mbps minimum.
+    target_br = (int(source_bitrate) if source_bitrate > 0
+                 else max(200_000, min(12_000_000, int(pixels * 30 * 0.055))))
+    maxrate = max(1, int(target_br * 1.15))
+    bufsize = max(1, int(target_br * 2))
+    budget = ["-b:v", str(target_br), "-maxrate", str(maxrate), "-bufsize", str(bufsize)]
+    note = f"目标约 {target_br / 1_000_000:.2f} Mbps（按源码率控制体积）"
     if encoder == "nvenc":
         return [
             "-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq",
-            "-rc", "vbr", "-cq", "15", "-b:v", str(target_br),
-            "-maxrate", str(maxrate), "-bufsize", str(bufsize),
+            "-rc", "vbr", "-cq", "21", *budget,
             "-spatial-aq", "1", "-temporal-aq", "1",
             "-profile:v", "high", "-bf", "0", "-pix_fmt", "yuv420p",
-        ], "NVIDIA 硬编 p5/CQ15（高画质）"
+        ], "NVIDIA p5/CQ21；" + note
     if encoder == "qsv":
         return [
-            "-c:v", "h264_qsv", "-preset", "slow", "-global_quality", "16",
-            "-look_ahead", "1", "-b:v", str(target_br),
-            "-maxrate", str(maxrate), "-bufsize", str(bufsize),
+            "-c:v", "h264_qsv", "-preset", "slow", *budget,
             "-bf", "0", "-pix_fmt", "nv12",
-        ], "Intel QSV slow（高画质硬编）"
+        ], "Intel QSV VBR；" + note
     if encoder == "mf":
-        # Windows MF：质量档拉满 + 码率下限
         return [
-            "-c:v", "h264_mf", "-rate_control", "quality", "-quality", "100",
-            "-b:v", str(target_br), "-maxrate", str(maxrate),
+            "-c:v", "h264_mf", "-rate_control", "pc_vbr", *budget,
             "-pix_fmt", "yuv420p",
-        ], "Windows 硬编 h264_mf（最高质量档）"
+        ], "Windows MF VBR；" + note
     if encoder == "amf":
         return [
             "-c:v", "h264_amf", "-quality", "quality",
-            "-rc", "vbr_peak", "-b:v", str(target_br),
-            "-maxrate", str(maxrate),
-            "-qp_i", "15", "-qp_p", "17", "-bf_delta_qp", "0",
-            "-pix_fmt", "yuv420p",
-        ], "AMD AMF quality（高画质硬编）"
-    # CPU libx264：medium+14 兼顾速度与接近旧版 slow/14 的清晰度
+            "-rc", "vbr_peak", *budget, "-pix_fmt", "yuv420p",
+        ], "AMD AMF VBR；" + note
     return [
-        "-c:v", "libx264", "-preset", "medium", "-crf", "14",
-        "-profile:v", "high", "-level", "4.2",
-        "-aq-mode", "1", "-bf", "0", "-pix_fmt", "yuv420p", "-threads", "0",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-profile:v", "high", "-aq-mode", "1", "-bf", "0",
+        "-pix_fmt", "yuv420p", "-threads", "0",
         "-maxrate", str(maxrate), "-bufsize", str(bufsize),
-    ], "CPU libx264 medium/CRF14（高画质）"
+    ], "CPU medium/CRF20；" + note
 
 
 def _effective_crop_target(source_w: int, source_h: int, mode_key: str):
@@ -580,6 +563,10 @@ class MetadataWorker(QObject):
                 if self._proc is proc:
                     self._proc = None
             err_thread.join(timeout=2.0)
+            if proc.stdout is not None:
+                proc.stdout.close()
+            if proc.stderr is not None and not err_thread.is_alive():
+                proc.stderr.close()
 
         stderr = "".join(err_chunks)
         return subprocess.CompletedProcess(cmd, rc, stdout="", stderr=stderr)
@@ -895,7 +882,7 @@ class MetadataWorker(QObject):
         - Center crop only (no stretch)
         - Never upscale to “1080×1920” when source is smaller (that causes blur)
         - No fps filter (preserve source frame rate)
-        - Delivery-grade H.264（medium/CRF15 或硬编高画质，兼顾速度）
+        - Source-bounded H.264 bitrate (avoid inflating compressed source files)
         """
         w, h, fps, src_br = _probe_video_meta(ffmpeg, source)
         notes = []
@@ -1139,6 +1126,12 @@ class MetadataWorker(QObject):
                         os.utime(destination, (stat.st_atime, stat.st_mtime))
                     completed += 1
                     self.log.emit(f"完成：{destination}")
+                    if destination.is_file() and source.stat().st_size > 0:
+                        before, after = source.stat().st_size, destination.stat().st_size
+                        self.log.emit(
+                            f"  · 文件体积：{before / 1048576:.2f} → {after / 1048576:.2f} MB"
+                            f"（{after / before:.2f} 倍）"
+                        )
                     self.file_done.emit(str(source), str(destination))
                 except RuntimeError as exc:
                     if self.cancelled or "任务已停止" in str(exc):

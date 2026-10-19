@@ -13,7 +13,7 @@ if ([string]::IsNullOrWhiteSpace($version)) {
   $versionFile = Join-Path $root 'VERSION'
   if (Test-Path $versionFile) { $version = (Get-Content -Raw -LiteralPath $versionFile).Trim() }
 }
-if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.75' }
+if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.76' }
 $version = $version.Trim().TrimStart('v')
 if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Invalid application version: $version" }
 $versionHook = Join-Path $env:TEMP ("video_toolkit_version_" + [guid]::NewGuid().ToString('N') + '.py')
@@ -53,6 +53,7 @@ python -m PyInstaller --clean --noconfirm --windowed --onedir --noupx --contents
   --hidden-import 'charset_normalizer' `
   --hidden-import 'charset_normalizer.md' `
   --hidden-import 'charset_normalizer.cd' `
+  --hidden-import 'modules.asr_timing' `
   --hidden-import 'modules.caption_qt_burn' `
   --hidden-import 'modules.dynamic_caption_page' `
   --hidden-import 'modules.vertical_stack' `
@@ -74,6 +75,7 @@ python -m PyInstaller --clean --noconfirm --windowed --onedir --noupx --contents
   --workpath (Join-Path $root 'build') `
   --specpath $root `
   (Join-Path $root 'app.py')
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 # Ensure ctranslate2/__init__.py sits next to native libs.
 # Empty package dir from collect-binaries shadowed PYZ and broke faster-whisper:
 # module 'ctranslate2' has no attribute 'StorageView'

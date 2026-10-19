@@ -2,7 +2,7 @@
 
 libass glyph widths ≠ Qt metrics caused huge export word gaps and made the
 word-spacing spinner feel ineffective. Export now paints ARGB frames with Qt
-and overlays them in FFmpeg (ASS kept only as fallback).
+and overlays them in FFmpeg. Speech captions must never silently switch engines.
 """
 from __future__ import annotations
 
@@ -205,13 +205,12 @@ def resolve_lip_sync_cut(t_sec, tokens, phrase_words, start, end, settings=None)
     return cut, active, timings
 
 
-def caption_content_at(t_sec: float, phrase_srt: str, word_srt: str, settings: dict):
+def caption_content_at(t_sec: float, phrase_srt: str, word_srt: str, settings: dict, *, parsed=None):
     """Return (phrase_text, tokens, cut_1based, active_word) at time t."""
     from .dynamic_caption_page import parse_srt, tokens_for, group_word_srt
 
     t = max(0.0, float(t_sec or 0.0))
-    phrases = parse_srt(phrase_srt or "")
-    words = parse_srt(word_srt or "")
+    phrases, words = parsed if parsed is not None else (parse_srt(phrase_srt or ""), parse_srt(word_srt or ""))
     if not phrases and words:
         max_chars = max(18, int(settings.get("line_length") or 18) * 2)
         max_words = int(settings.get("max_words") or 7)
@@ -244,8 +243,8 @@ def caption_content_at(t_sec: float, phrase_srt: str, word_srt: str, settings: d
     return text, tokens, cut, active
 
 
-def caption_visual_key(t_sec: float, phrase_srt: str, word_srt: str, settings: dict) -> tuple:
-    text, tokens, cut, _active = caption_content_at(t_sec, phrase_srt, word_srt, settings)
+def caption_visual_key(t_sec: float, phrase_srt: str, word_srt: str, settings: dict, *, parsed=None) -> tuple:
+    text, tokens, cut, _active = caption_content_at(t_sec, phrase_srt, word_srt, settings, parsed=parsed)
     effect = str((resolve_effect(settings) or ""))
     return (text, cut, effect, int(settings.get("word_spacing") or 0), int(settings.get("letter_spacing") or 0))
 
@@ -256,77 +255,61 @@ def resolve_effect(settings: dict) -> str:
     return str(preset.get("effect") or settings.get("effect") or "word_color")
 
 
-def paint_caption_overlay_image(
-    settings: dict,
-    phrase_srt: str,
-    word_srt: str,
-    t_sec: float,
-    size=(1080, 1920),
-) -> QImage:
-    """Paint captions onto a transparent 1080×1920 ARGB image (preview==export)."""
-    from .dynamic_caption_page import (
-        SEMANTIC_LAYOUT_EFFECTS, caption_layout_context, caption_page_geometry,
-        caption_uses_bold_face, caption_wrapped_lines, resolve_caption_preset,
-        select_emphasis_words, semantic_stack_geometry, semantic_stack_layout,
-    )
-
-    w, h = int(size[0] or 1080), int(size[1] or 1920)
-    image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(Qt.GlobalColor.transparent)
-
-    sample = ""
-    try:
-        sample = str(parse_first_text(phrase_srt, word_srt) or "")
-    except Exception:
-        sample = ""
-    settings = normalize_caption_paint_settings(settings, sample)
-    preset = resolve_caption_preset(settings)
-    context = caption_layout_context(settings)
-    font, metrics, _gap, _line_gap, _max_w = context
-
-    text, tokens, cut, active_word = caption_content_at(t_sec, phrase_srt, word_srt, settings)
+def paint_caption_content(painter, settings, text, tokens, cut, *, context=None, path_cache=None):
+    """One painter for live preview and export; coordinates are 1080 x 1920."""
+    from .dynamic_caption_page import SEMANTIC_LAYOUT_EFFECTS, caption_layout_context, resolve_caption_preset
     if not tokens:
-        return image
-
-    fixed_all = (
-        settings.get("caption_mode") == "自由文案动画（不对口型）"
-        and settings.get("free_animation") == "整段固定"
-    )
-    free_static = fixed_all
-    effect = preset.get("effect") or "word_color"
-    if free_static:
-        effect = "plain"
+        return
+    preset = resolve_caption_preset(settings)
+    context = context or caption_layout_context(settings)
+    font, metrics, _gap, _line_gap, _max_w = context
+    fixed_all = (settings.get("caption_mode") == "自由文案动画（不对口型）"
+                 and settings.get("free_animation") == "整段固定")
+    effect = "plain" if fixed_all else preset.get("effect") or "word_color"
+    if fixed_all:
         cut = 0
-
     base_color = QColor(settings.get("text_color") or "#FFFFFF")
     outline = QColor(settings.get("outline_color") or "#111827")
     highlight = QColor(settings.get("highlight_color") or "#FF2D2D")
     background_color = QColor(settings.get("background_color") or "#168AAD")
     active_text_color = QColor(settings.get("active_text_color") or "#FFFFFF")
     pen_width = max(1.0, float(settings.get("outline_width") or 3))
+    from .caption_rich import paint_rich_caption
+    rich_cut = 0 if settings.get("caption_mode") == "自由文案动画（不对口型）" else cut
+    if paint_rich_caption(painter, text, settings, rich_cut, tokens):
+        return
+    if preset.get("effect") == "three_bands":
+        paint_three_bands(painter, text, settings)
+    elif effect in SEMANTIC_LAYOUT_EFFECTS:
+        _paint_semantic(painter, settings, preset, tokens, cut, effect,
+                        base_color, outline, highlight, pen_width, fixed_all)
+    else:
+        _paint_standard(painter, settings, context, font, metrics, tokens, cut, effect,
+                        base_color, outline, highlight, background_color, active_text_color,
+                        pen_width, fixed_all, path_cache=path_cache)
 
+
+def paint_caption_overlay_image(
+    settings: dict, phrase_srt: str, word_srt: str, t_sec: float,
+    size=(1080, 1920), *, parsed=None, normalized=False, context=None, path_cache=None,
+) -> QImage:
+    """Paint the shared 1080 x 1920 layout directly at output resolution."""
+    w, h = int(size[0] or 1080), int(size[1] or 1920)
+    image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    if not normalized:
+        settings = normalize_caption_paint_settings(settings, parse_first_text(phrase_srt, word_srt))
+    text, tokens, cut, _active = caption_content_at(t_sec, phrase_srt, word_srt, settings, parsed=parsed)
+    if not tokens:
+        return image
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-
+    scale = min(w / 1080.0, h / 1920.0)
+    painter.translate((w - 1080 * scale) / 2, (h - 1920 * scale) / 2)
+    painter.scale(scale, scale)
     try:
-        from .caption_rich import paint_rich_caption
-        rich_cut = 0 if settings.get("caption_mode") == "自由文案动画（不对口型）" else cut
-        if paint_rich_caption(painter, text, settings, rich_cut, tokens):
-            pass
-        elif preset.get("effect") == "three_bands":
-            paint_three_bands(painter, text, settings)
-        elif effect in SEMANTIC_LAYOUT_EFFECTS:
-            _paint_semantic(
-                painter, settings, preset, tokens, cut, effect,
-                base_color, outline, highlight, pen_width, fixed_all,
-            )
-        else:
-            _paint_standard(
-                painter, settings, context, font, metrics, tokens, cut, effect,
-                base_color, outline, highlight, background_color, active_text_color,
-                pen_width, fixed_all,
-            )
+        paint_caption_content(painter, settings, text, tokens, cut, context=context, path_cache=path_cache)
     finally:
         painter.end()
     return image
@@ -487,7 +470,7 @@ def _paint_semantic(
 def _paint_standard(
     painter, settings, context, font, metrics, tokens, cut, effect,
     base_color, outline, highlight, background_color, active_text_color,
-    pen_width, fixed_all,
+    pen_width, fixed_all, *, path_cache=None,
 ):
     from .dynamic_caption_page import caption_page_geometry, caption_wrapped_lines
 
@@ -515,7 +498,8 @@ def _paint_standard(
     geometry = caption_page_geometry(page_lines, settings, context)
     page_token_offset = sum(sum(len(line) for line in pages[i]) for i in range(active_page))
     token_i = page_token_offset
-    path_cache = {}
+    if path_cache is None:
+        path_cache = {}
     for line, line_geometry in zip(page_lines, geometry):
         for token, item in zip(line, line_geometry):
             width = item["width"]
@@ -611,15 +595,22 @@ def _paint_standard(
 def collect_caption_cut_times(
     phrase_srt: str, word_srt: str, duration: float, settings: dict | None = None,
 ) -> list[float]:
-    from .dynamic_caption_page import parse_srt
+    from .dynamic_caption_page import parse_srt, tokens_for
 
     duration = max(0.05, float(duration or 0.05))
     lead = karaoke_lead_seconds(settings)  # 默认 0；仅显式 karaoke_lead_ms 时加提前切点
     times = {0.0, duration}
-    for s, e, _ in parse_srt(phrase_srt or ""):
+    words = parse_srt(word_srt or "")
+    for s, e, text in parse_srt(phrase_srt or ""):
         times.add(max(0.0, min(duration, float(s))))
         times.add(max(0.0, min(duration, float(e))))
-    for s, e, _ in parse_srt(word_srt or ""):
+        phrase_words = [w for w in words if s - .01 <= (w[0] + w[1]) / 2 <= e + .01]
+        if not phrase_words:
+            # Imported phrase-only SRT uses the same estimated word changes as
+            # the live painter, rather than one arbitrary middle sample.
+            for ws, _we in fit_phrase_word_timings(s, e, len(tokens_for(text)), []):
+                times.add(max(0.0, min(duration, ws - lead)))
+    for s, e, _ in words:
         ws, we = float(s), float(e)
         times.add(max(0.0, min(duration, ws)))
         times.add(max(0.0, min(duration, we)))
@@ -644,6 +635,7 @@ def bake_qt_caption_overlay_mov(
     target_w: int,
     target_h: int,
     log=None,
+    cancelled=None,
 ) -> Path:
     """Paint Qt caption segments → concat → transparent MOV (yuva420p/png)."""
     def _log(msg: str):
@@ -653,6 +645,11 @@ def bake_qt_caption_overlay_mov(
             except Exception:
                 pass
 
+    def check_cancelled():
+        if callable(cancelled) and cancelled():
+            raise RuntimeError("任务已取消")
+
+    check_cancelled()
     duration = max(0.05, float(duration or 0.05))
     tw = max(2, int(target_w or 1080))
     th = max(2, int(target_h or 1920))
@@ -664,112 +661,154 @@ def bake_qt_caption_overlay_mov(
     ).hexdigest()[:12]
     work.mkdir(parents=True, exist_ok=True)
 
-    settings = normalize_caption_paint_settings(
-        settings, parse_first_text(phrase_srt, word_srt)
-    )
-    cuts = collect_caption_cut_times(phrase_srt, word_srt, duration, settings)
-    # Build segments [t0,t1) with stable visual key
-    segments = []
-    last_key = None
-    seg_start = 0.0
-    for i, t in enumerate(cuts):
-        key = caption_visual_key(min(t + 0.001, duration), phrase_srt, word_srt, settings)
-        if last_key is None:
-            last_key = key
-            seg_start = 0.0
-            continue
-        if key != last_key:
-            segments.append((seg_start, t, last_key))
-            seg_start = t
-            last_key = key
-    segments.append((seg_start, duration, last_key))
-    # Blank states are real time: removing them advances all later captions.
-    segments = [(a, b, k) for a, b, k in segments if b > a]
-
-    # 禁止「合并不同跟读状态」：用中间段的 cut 覆盖整段会让高亮提前（导出字幕偏快）。
-    # 段数过多时直接回退 ASS，而不是错合状态。
-    cue_count = str(phrase_srt or "").count("-->") + str(word_srt or "").count("-->")
-    max_segments = 360
-    if len(segments) > max_segments or cue_count > 900 or duration > 900:
-        raise RuntimeError(
-            f"字幕过密/过长（cue≈{cue_count}, 段={len(segments)}, {duration:.0f}s），"
-            f"改用 ASS 烧录以保证口型不被错误合并"
-        )
-
-    # 几何按 1080×1920 排版；勿缩画布（会画到画外）。靠限段数 + 及时释放控内存。
-    paint_w, paint_h = 1080, 1920
-
-    if not segments:
-        # empty transparent still
-        blank = QImage(paint_w, paint_h, QImage.Format.Format_ARGB32_Premultiplied)
-        blank.fill(Qt.GlobalColor.transparent)
-        png = work / "blank.png"
-        blank.save(str(png), "PNG")
-        segments = [(0.0, duration, ("", 0, "", 0, 0))]
-        png_paths = [png]
-    else:
-        png_paths = []
-        _log(f"Qt 字幕烧录：{len(segments)} 个画面状态…")
-        for idx, (t0, t1, _key) in enumerate(segments):
-            mid = (t0 + t1) / 2.0
-            img = paint_caption_overlay_image(
-                settings, phrase_srt, word_srt, mid, size=(paint_w, paint_h),
-            )
-            png = work / f"c{idx:04d}.png"
-            if not img.save(str(png), "PNG"):
-                raise RuntimeError(f"无法写入字幕帧：{png.name}")
-            png_paths.append(png)
-            # 尽快释放大图，避免批量合成时内存堆积崩溃
-            del img
-            if idx and idx % 30 == 0:
-                _log(f"  · Qt 字幕已绘制 {idx}/{len(segments)} …")
-                try:
-                    import gc
-                    gc.collect()
-                except Exception:
-                    pass
-    # concat demuxer list
-    list_path = work / "list.txt"
-    lines = []
-    for png, (t0, t1, _) in zip(png_paths, segments):
-        # concat paths: escape single quotes
-        p = str(png.resolve()).replace("\\", "/").replace("'", r"'\''")
-        lines.append(f"file '{p}'")
-        lines.append("option framerate 1000")
-        lines.append(f"duration {t1 - t0:.6f}")
-    # last file must repeat without duration
-    last = str(png_paths[-1].resolve()).replace("\\", "/").replace("'", r"'\''")
-    lines.append(f"file '{last}'")
-    lines.append("option framerate 1000")
-    list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    out_mov = work / "caption_overlay.mov"
-    # PNG codec keeps alpha; then scale to target
-    command = [
-        str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
-        "-f", "concat", "-safe", "0", "-i", str(list_path),
-        "-vf", f"scale={tw}:{th}:flags=lanczos,format=rgba",
-        "-c:v", "png", "-fps_mode", "vfr", "-an",
-        "-t", f"{duration:.4f}",
-        str(out_mov),
-    ]
-    result = subprocess.run(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", errors="replace", **hidden_kwargs(),
-    )
-    if result.returncode != 0 or not out_mov.is_file() or out_mov.stat().st_size < 64:
-        err = (result.stderr or "")[-800:]
-        raise RuntimeError(f"Qt 字幕透明轨合成失败：{err}")
-    _log(f"Qt 字幕透明轨就绪：{len(segments)} 段 → {out_mov.name}")
-    # Persist segment meta for debug
     try:
-        (work / "meta.json").write_text(
-            json.dumps({"segments": len(segments), "duration": duration, "size": [tw, th]}, ensure_ascii=False),
-            encoding="utf-8",
+        settings = normalize_caption_paint_settings(
+            settings, parse_first_text(phrase_srt, word_srt)
         )
-    except Exception:
+        from .dynamic_caption_page import parse_srt, caption_layout_context
+        parsed = (parse_srt(phrase_srt or ""), parse_srt(word_srt or ""))
+        context = caption_layout_context(settings)
+        path_cache = {}
+        cuts = collect_caption_cut_times(phrase_srt, word_srt, duration, settings)
+        # Build segments [t0,t1) with stable visual key
+        segments = []
+        last_key = None
+        seg_start = 0.0
+        for i, t in enumerate(cuts):
+            check_cancelled()
+            key = caption_visual_key(min(t + 0.000001, duration), phrase_srt, word_srt, settings, parsed=parsed)
+            if last_key is None:
+                last_key = key
+                seg_start = 0.0
+                continue
+            if key != last_key:
+                segments.append((seg_start, t, last_key))
+                seg_start = t
+                last_key = key
+        segments.append((seg_start, duration, last_key))
+        # Blank states are real time: removing them advances all later captions.
+        segments = [(a, b, k) for a, b, k in segments if b > a]
+
+        # States are rendered one at a time; duration/cue count is not a reason to
+        # change font engines. Parse SRT once and draw at output resolution.
+        paint_w, paint_h = tw, th
+
+        if not segments:
+            # empty transparent still
+            blank = QImage(paint_w, paint_h, QImage.Format.Format_ARGB32_Premultiplied)
+            blank.fill(Qt.GlobalColor.transparent)
+            png = work / "blank.png"
+            blank.save(str(png), "PNG")
+            segments = [(0.0, duration, ("", 0, "", 0, 0))]
+            png_paths = [png]
+        else:
+            png_paths = []
+            _log(f"Qt 字幕烧录：{len(segments)} 个画面状态…")
+            for idx, (t0, t1, _key) in enumerate(segments):
+                check_cancelled()
+                mid = (t0 + t1) / 2.0
+                img = paint_caption_overlay_image(
+                    settings, phrase_srt, word_srt, mid, size=(paint_w, paint_h),
+                    parsed=parsed, normalized=True, context=context, path_cache=path_cache,
+                )
+                png = work / f"c{idx:04d}.png"
+                if not img.save(str(png), "PNG"):
+                    raise RuntimeError(f"无法写入字幕帧：{png.name}")
+                png_paths.append(png)
+                # 尽快释放大图，避免批量合成时内存堆积崩溃
+                del img
+                if idx and idx % 30 == 0:
+                    _log(f"  · Qt 字幕已绘制 {idx}/{len(segments)} …")
+                    try:
+                        import gc
+                        gc.collect()
+                    except Exception:
+                        pass
+        # concat demuxer list
+        list_path = work / "list.txt"
+        lines = []
+        for png, (t0, t1, _) in zip(png_paths, segments):
+            # concat paths: escape single quotes
+            p = str(png.resolve()).replace("\\", "/").replace("'", r"'\''")
+            lines.append(f"file '{p}'")
+            lines.append("option framerate 1000")
+            lines.append(f"duration {t1 - t0:.6f}")
+        # last file must repeat without duration
+        last = str(png_paths[-1].resolve()).replace("\\", "/").replace("'", r"'\''")
+        lines.append(f"file '{last}'")
+        lines.append("option framerate 1000")
+        list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        out_mov = work / "caption_overlay.mov"
+        # PNG codec keeps alpha; then scale to target
+        command = [
+            str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0", "-i", str(list_path),
+            "-vf", "format=rgba",
+            "-c:v", "png", "-fps_mode", "vfr", "-an",
+            # Keep the terminal concat frame so the previous packet gets its full
+            # duration. The final mux trims to the exact main-video duration.
+            "-t", f"{duration + 0.002:.4f}",
+            str(out_mov),
+        ]
+        error_path = work / "ffmpeg.log"
+        try:
+            with error_path.open("w", encoding="utf-8") as error_file:
+                process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=error_file, **hidden_kwargs())
+                try:
+                    while process.poll() is None:
+                        check_cancelled()
+                        time.sleep(0.1)
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+            if process.returncode != 0 or not out_mov.is_file() or out_mov.stat().st_size < 64:
+                err = error_path.read_text(encoding="utf-8", errors="replace")[-800:]
+                raise RuntimeError(f"Qt 字幕透明轨合成失败：{err}")
+        finally:
+            for png in png_paths:
+                png.unlink(missing_ok=True)
+        _log(f"Qt 字幕透明轨就绪：{len(segments)} 段 → {out_mov.name}")
+        # Persist segment meta for debug
+        try:
+            (work / "meta.json").write_text(
+                json.dumps({"segments": len(segments), "duration": duration, "size": [tw, th]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        return out_mov
+
+    except BaseException:
+        (work / "caption_overlay.mov").unlink(missing_ok=True)
+        raise
+    finally:
+        for intermediate in [*work.glob("c*.png"), work / "blank.png"]:
+            intermediate.unlink(missing_ok=True)
+
+
+def cleanup_qt_caption_overlay(path):
+    """Remove only files in our generated per-render directory after muxing."""
+    if not path:
+        return
+    path = Path(path).resolve()
+    root = instance_temp_dir("qt_cap").resolve()
+    if path.name != "caption_overlay.mov" or path.parent.parent != root:
+        return
+    for name in ("caption_overlay.mov", "meta.json", "ffmpeg.log", "list.txt"):
+        try:
+            (path.parent / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        path.parent.rmdir()
+    except OSError:
         pass
-    return out_mov
 
 
 def compose_vf_with_qt_overlay(v_filter_str: str, caption_input_index: int) -> str:

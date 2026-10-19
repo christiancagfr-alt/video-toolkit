@@ -86,7 +86,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.75").strip().lstrip("v") or "1.7.75"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.76").strip().lstrip("v") or "1.7.76"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -729,8 +729,8 @@ def segments_to_srt(segments, language=None) -> str:
             re.sub(r"\s+", " ", str(seg.get("text", ""))).strip(), language=language)
         if not text or is_asr_junk_caption(text):
             continue
-        start = seg.get("start", 0)
-        end = max(float(seg.get("end", start + 2)), float(start) + 0.2)
+        from modules.asr_timing import checked_span
+        start, end = checked_span(seg.get("start"), seg.get("end"))
         blocks.append(f"{len(blocks)+1}\n{timestamp_srt(start)} --> {timestamp_srt(end)}\n{text}")
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
@@ -743,8 +743,8 @@ def words_to_segments(words):
         text = str(word.get("text", "")).strip()
         if not text:
             continue
-        w_start = float(word.get("start") or end or 0)
-        w_end = float(word.get("end") or (w_start + 0.3))
+        from modules.asr_timing import checked_span
+        w_start, w_end = checked_span(word.get("start"), word.get("end"))
         if start is None:
             start = w_start
         current.append(text)
@@ -768,7 +768,8 @@ def clean_model_srt(text: str, language=None) -> str:
         body = normalize_subtitle_text(text.strip(), language=language)
         if is_asr_junk_caption(body):
             return ""
-        return f"1\n00:00:00,000 --> 99:59:59,000\n{body}\n"
+        from modules.asr_timing import CaptionTimingError
+        raise CaptionTimingError("识别服务只返回文本，没有时间戳；不能伪造字幕时长，请重新识别")
     # 去掉 Whisper 幻觉水印行（如「Υπότιτλοι AUTHORWAVE」）
     return filter_asr_junk_srt(text.strip() + "\n")
 
@@ -853,8 +854,11 @@ class TranscribeWorker(QObject):
         # every result here can take longer than ASR itself when the free translator
         # is rate-limited, so callers that only need a timeline may opt out.
         self.translate_result = bool(translate_result)
+        from modules.dynamic_caption_page import _media_caption_key
         task_payload = {
-            "version": 2, "provider": provider, "model": model,
+            "version": 3,
+            "media_identities": [_media_caption_key(source) for source in files],
+            "provider": provider, "model": model,
             "language": self.language, "diarize": bool(diarize),
             "sources": [source_signature(source) for source in files],
         }
@@ -884,6 +888,13 @@ class TranscribeWorker(QObject):
                     raise RuntimeError("任务已取消")
                 source_key = stable_key(source_signature(source))
                 cached = state["results"].get(source_key)
+                if cached and not is_supported_video_url(source):
+                    from modules.dynamic_caption_page import validate_srt_for_media
+                    try:
+                        cached["srt"] = validate_srt_for_media(cached.get("srt", ""), source, self.ffmpeg_path)
+                    except RuntimeError as exc:
+                        self.log.emit(f"断点字幕缓存时间轴无效，重新识别：{exc}")
+                        cached = None
                 if cached:
                     cached_original = normalize_required_capitalization(cached.get("original", ""))
                     cached_srt = normalize_required_capitalization(cached.get("srt", ""))
@@ -929,8 +940,10 @@ class TranscribeWorker(QObject):
         return path
 
     def _source_work_key(self, source_value: str) -> str:
+        from modules.dynamic_caption_page import _media_caption_key
         return stable_key({"source": source_signature(source_value), "provider": self.provider,
-                           "model": self.model, "language": self.language})[:20]
+                           "model": self.model, "language": self.language, "timing_version": 2,
+                           "media": _media_caption_key(source_value)})[:20]
 
     def _cleanup_source_work(self, source_value: str):
         work = self.output_dir / ".work" / self._source_work_key(source_value)
@@ -1095,9 +1108,10 @@ class TranscribeWorker(QObject):
                 "（TikTok/抖音链接有时只下到静音画面；请更新 yt-dlp 或改用含声音的本地文件。）"
             )
 
+        from modules.dynamic_caption_page import caption_media_duration
         if self.provider == LOCAL_PROVIDER:
             recognition_input = source
-            self.log.emit("本地 Whisper 直接流式读取媒体，不创建整段 PCM 副本。")
+            self.log.emit("本地 Whisper 按画面时长提取 16k 单声道识别音轨。")
         elif self.provider == "Groq":
             recognition_input = source
             self.log.emit("Groq 将直接从媒体生成 90 秒分段，不创建整段 PCM 副本。")
@@ -1106,7 +1120,8 @@ class TranscribeWorker(QObject):
             if not audio.exists() or audio.stat().st_size == 0:
                 self.log.emit("创建临时 PCM 无损识别副本（保留原声道；不会修改视频音轨）…")
                 cmd = [self.ffmpeg_path, "-y", "-i", str(source), "-map", "0:a:0", "-vn",
-                       "-c:a", "pcm_s16le", str(audio)]
+                       "-af", "aresample=async=1:first_pts=0", "-c:a", "pcm_s16le",
+                       "-t", f"{caption_media_duration(self.ffmpeg_path, source):.6f}", str(audio)]
                 creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
                 proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                       creationflags=creation, text=True, encoding="utf-8", errors="replace")
@@ -1128,6 +1143,13 @@ class TranscribeWorker(QObject):
                 self.log.emit(f"使用 {self.provider} 密钥 {masked_key(item['key'])} …")
             try:
                 srt, plain, raw = self._call_provider(recognition_input, item["key"], temp)
+                from modules.dynamic_caption_page import validate_srt_for_media
+                srt = validate_srt_for_media(srt, source, self.ffmpeg_path)
+                from modules.asr_timing import validate_asr_segments
+                provider_words = (raw or {}).get("words") or ((raw or {}).get("response") or {}).get("words") or []
+                provider_words = [w for w in provider_words if w.get("type") in (None, "word")]
+                if provider_words:
+                    validate_asr_segments(provider_words, caption_media_duration(self.ffmpeg_path, source))
                 srt = normalize_required_capitalization(srt)
                 plain = normalize_required_capitalization(plain)
                 chinese = self._translate_chinese(plain) if self.translate_result else ""
@@ -1227,6 +1249,11 @@ class TranscribeWorker(QObject):
         return self._gladia(audio, key)
 
     def _local_whisper(self, audio: Path):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="vt_whisper_") as prep_dir:
+            return self._local_whisper_in_dir(audio, Path(prep_dir))
+
+    def _local_whisper_in_dir(self, audio: Path, prep_dir: Path):
         try:
             import ctranslate2
             if not hasattr(ctranslate2, "StorageView"):
@@ -1305,20 +1332,21 @@ class TranscribeWorker(QObject):
         language = None if not self.language or self.language == "auto" else self.language
 
         # 先抽 mono 16k WAV：本地 Whisper 解码更快、时间戳更稳（避免直接喂整段 mp4 又慢又容易第一次对不齐）
+        from modules.dynamic_caption_page import caption_media_duration
+        expected_duration = caption_media_duration(self.ffmpeg_path, audio)
         asr_audio = Path(audio)
         prep_wav = None
         try:
-            import tempfile
             creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            prep_dir = Path(tempfile.mkdtemp(prefix="vt_whisper_"))
             prep_wav = prep_dir / "asr_16k.wav"
             _emit(f"本地识别：抽取音轨 {audio.name} → 16k mono …")
             prep = subprocess.run(
                 [
                     self.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
                     "-i", str(audio), "-map", "0:a:0", "-vn",
+                    "-af", "aresample=async=1:first_pts=0",
                     "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
-                    str(prep_wav),
+                    "-t", f"{expected_duration:.6f}", str(prep_wav),
                 ],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                 creationflags=creation, text=True, encoding="utf-8", errors="replace",
@@ -1333,11 +1361,7 @@ class TranscribeWorker(QObject):
             _emit(f"16k 抽取异常，回退源文件：{prep_exc}")
             prep_wav = None
 
-        audio_dur = 0.0
-        try:
-            audio_dur = float(video_duration(self.ffmpeg_path, str(asr_audio)) or 0)
-        except Exception:
-            audio_dur = 0.0
+        audio_dur = caption_media_duration(self.ffmpeg_path, asr_audio)
         _emit(f"开始本地识别：{asr_audio.name}（约 {audio_dur:.0f}s）…")
 
         def collect_segments(stream, info, *, offset=0.0, label=""):
@@ -1363,7 +1387,7 @@ class TranscribeWorker(QObject):
                     _emit(f"本地识别中{label}：已生成 {len(segments)} 条字幕 …")
             return segments, info
 
-        def transcribe_file(model, path, *, offset=0.0, beam_size=None, use_vad=None, label=""):
+        def _transcribe_file_once(model, path, *, offset=0.0, beam_size=None, use_vad=None, label=""):
             try:
                 import onnxruntime  # noqa: F401
                 vad_default = True
@@ -1408,40 +1432,38 @@ class TranscribeWorker(QObject):
                 )
                 return collect_segments(stream, info, offset=offset, label=label)
 
-        def _word_density_ok(segs, expect_dur=0.0) -> bool:
-            if not segs:
-                return False
-            n_words = sum(len(s.get("words") or []) for s in segs)
-            span = max(0.5, float(segs[-1].get("end") or 0) - float(segs[0].get("start") or 0))
-            if n_words < max(3, int(span / 1.6)):
-                return False
-            # 中长视频：词轴覆盖率过低 = 第一次常对不上口型 / 总时长偏短
-            if expect_dur >= 60 and n_words > 0:
-                last_end = max(float(s.get("end") or 0) for s in segs)
-                if last_end < expect_dur * 0.90:
-                    return False
-            return True
+        from modules.asr_timing import (
+            CaptionTimingError, asr_coverage, asr_gaps, asr_needs_retry,
+            merge_asr_recovery, owned_asr_segments, recognition_windows, validate_asr_segments,
+        )
+
+        def transcribe_file(model, path, *, offset=0.0, beam_size=None, use_vad=None, label=""):
+            import wave
+            try:
+                with wave.open(str(path)) as wav:
+                    duration = wav.getnframes() / wav.getframerate()
+            except (OSError, wave.Error):
+                duration = caption_media_duration(self.ffmpeg_path, path)
+            # On extraction failure the original media may contain a longer audio
+            # stream. Validation still uses the picture clock, never the ASR end.
+            raw, info = _transcribe_file_once(model, path, beam_size=beam_size, use_vad=use_vad, label=label)
+            try:
+                checked = validate_asr_segments(raw, duration)
+            except CaptionTimingError as exc:
+                if use_vad is False:
+                    raise
+                _emit(f"识别时间戳无效，关闭 VAD 重试当前片段：{exc}")
+                raw, info = _transcribe_file_once(model, path, beam_size=beam_size, use_vad=False, label=label)
+                checked = validate_asr_segments(raw, duration)
+            return [
+                {**s, "start": s["start"] + offset, "end": s["end"] + offset,
+                 "words": [{**w, "start": w["start"] + offset, "end": w["end"] + offset}
+                           for w in s["words"]]}
+                for s in checked
+            ], info
 
         def _coverage_stats(segs, expect_dur=0.0):
-            n_words = sum(len(s.get("words") or []) for s in (segs or []))
-            last_end = max((float(s.get("end") or 0) for s in (segs or [])), default=0.0)
-            ratio = (last_end / expect_dur) if expect_dur > 1e-3 else 0.0
-            return n_words, last_end, ratio
-
-        def _pick_better_segments(current, challenger, expect_dur=0.0):
-            if not challenger:
-                return current
-            if not current:
-                return challenger
-            if _word_density_ok(challenger, expect_dur) and not _word_density_ok(current, expect_dur):
-                return challenger
-            _, cur_end, _ = _coverage_stats(current, expect_dur)
-            _, new_end, _ = _coverage_stats(challenger, expect_dur)
-            cur_n = sum(len(s.get("words") or []) for s in current)
-            new_n = sum(len(s.get("words") or []) for s in challenger)
-            if new_end > cur_end + 0.4 or (new_end >= cur_end - 0.2 and new_n > cur_n):
-                return challenger
-            return current
+            return asr_coverage(segs, expect_dur)
 
         def _merge_segment_windows(media_path, total_dur):
             """若成品旁有分组合成 sidecar，按每段 8~10s 窗口切分识别。"""
@@ -1500,10 +1522,10 @@ class TranscribeWorker(QObject):
                     if self.cancelled:
                         raise RuntimeError("任务已取消")
                     start = max(0.0, float(win.get("start") or 0))
-                    end = max(start + 0.2, float(win.get("end") or (start + 0.2)))
+                    end = max(start + 0.001, float(win.get("end") or (start + 0.001)))
                     # 轻微外扩，减少切点丢词；拼回时再裁到本窗
                     ss = max(0.0, start - (edge_pad if i > 0 else 0.0))
-                    ee = min(total_end + 0.05, end + (edge_pad if i < len(windows) - 1 else 0.0))
+                    ee = min(total_end, end + (edge_pad if i < len(windows) - 1 else 0.0))
                     this_len = max(0.25, ee - ss)
                     chunk = chunk_dir / f"s_{i:04d}.wav"
                     cmd = [
@@ -1517,7 +1539,7 @@ class TranscribeWorker(QObject):
                         cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                         creationflags=creation, text=True, encoding="utf-8", errors="replace",
                     )
-                    if proc.returncode != 0 or not chunk.is_file() or chunk.stat().st_size < 800:
+                    if proc.returncode != 0 or not chunk.is_file() or chunk.stat().st_size <= 44:
                         err = (proc.stderr or "")[-200:]
                         _emit(f"片段 {i + 1} 抽取失败：{err or 'unknown'}")
                         return None
@@ -1530,33 +1552,33 @@ class TranscribeWorker(QObject):
                         model, chunk, offset=ss, use_vad=use_vad,
                         label=f"[{i + 1}/{len(windows)}]",
                     )
-                    # 只保留落在本窗内的词/句，避免外扩区重复
-                    kept = []
-                    for s in segs or []:
-                        words = [
-                            w for w in (s.get("words") or [])
-                            if start - 1e-3 <= float(w.get("start") or 0) < end + 1e-3
+                    # Check each window, so a later successful window cannot hide
+                    # an omitted middle sentence or the final few seconds.
+                    local = [
+                        {**s, "start": s["start"] - ss, "end": s["end"] - ss,
+                         "words": [{**w, "start": w["start"] - ss, "end": w["end"] - ss}
+                                   for w in (s.get("words") or [])]}
+                        for s in segs
+                    ]
+                    if use_vad is not False and asr_needs_retry(local, ee - ss):
+                        _emit(f"片段 {i + 1} 词轴可能不完整，关闭 VAD 补识别当前片段…")
+                        retry, retry_info = transcribe_file(
+                            model, chunk, use_vad=False,
+                            label=f"[{i + 1}/{len(windows)} 补识别]",
+                        )
+                        recovered = merge_asr_recovery(local, retry, ee - ss)
+                        segs = [
+                            {**s, "start": s["start"] + ss, "end": s["end"] + ss,
+                             "words": [{**w, "start": w["start"] + ss, "end": w["end"] + ss}
+                                       for w in (s.get("words") or [])]}
+                            for s in recovered
                         ]
-                        if words:
-                            s = dict(s)
-                            s["words"] = words
-                            s["start"] = float(words[0].get("start") or start)
-                            s["end"] = float(words[-1].get("end") or end)
-                            s["text"] = " ".join(
-                                str(w.get("word") or w.get("text") or "").strip()
-                                for w in words
-                            ).strip() or str(s.get("text") or "")
-                            kept.append(s)
-                        else:
-                            seg_start = float(s.get("start") or 0)
-                            seg_end = float(s.get("end") or 0)
-                            if seg_end <= start + 1e-3 or seg_start >= end - 1e-3:
-                                continue
-                            s = dict(s)
-                            s["start"] = max(start, seg_start)
-                            s["end"] = min(end, seg_end)
-                            kept.append(s)
-                    all_segs.extend(kept)
+                        info = retry_info
+                        unresolved = asr_gaps(recovered, ee - ss)
+                        if unresolved:
+                            ranges = "、".join(f"{a + ss:.1f}–{b + ss:.1f}s" for a, b in unresolved)
+                            _emit(f"片段补识别后仍有字幕空档：{ranges}（可能是静音或漏识别，请核对）")
+                    all_segs.extend(owned_asr_segments(segs, start, end, total_end))
             finally:
                 try:
                     shutil.rmtree(chunk_dir, ignore_errors=True)
@@ -1564,7 +1586,7 @@ class TranscribeWorker(QObject):
                     pass
             if not all_segs:
                 return None
-            return all_segs, info
+            return sorted(all_segs, key=lambda s: (s["start"], s["end"])), info
 
         def _transcribe_long_chunked(model, wav_path, total_dur, *, use_vad=None):
             """长音频/长文案：重叠短窗识别再拼时间戳，避免整段截断与边界丢词。
@@ -1585,31 +1607,22 @@ class TranscribeWorker(QObject):
                     f"（成品约 {total_dur:.0f}s，逐段约 "
                     f"{(merge_windows[0]['end'] - merge_windows[0]['start']):.0f}s）…"
                 )
+                bounded = []
+                for window in merge_windows:
+                    for part in recognition_windows(window["end"] - window["start"]):
+                        bounded.append({"start": window["start"] + part["start"],
+                                        "end": window["start"] + part["end"], "label": window["label"]})
                 return _transcribe_windows(
-                    model, wav_path, merge_windows, use_vad=use_vad,
+                    model, wav_path, bounded, use_vad=use_vad, edge_pad=2.0,
                 )
 
-            chunk_len, overlap = 30.0, 4.0
-            step = max(20.0, chunk_len - overlap)
-            starts = []
-            cursor = 0.0
-            while cursor < total_dur - 0.35:
-                starts.append(cursor)
-                if cursor + chunk_len >= total_dur - 0.15:
-                    break
-                cursor += step
-            if not starts:
-                starts = [0.0]
-            windows = []
-            for offset in starts:
-                windows.append({
-                    "start": offset,
-                    "end": min(total_dur, offset + chunk_len),
-                    "label": f"{offset:.0f}s",
-                })
+            # Non-overlapping 26s ownership + 2s context each side = 30s decode.
+            # Previously 30s ownership at 26s intervals appended overlap twice.
+            overlap = 4.0
+            windows = recognition_windows(total_dur)
             _emit(
-                f"长音频（{total_dur:.0f}s）分段识别：每段约 {int(chunk_len)}s，"
-                f"重叠 {overlap:.0f}s，共 {len(windows)} 段…"
+                f"长音频（{total_dur:.0f}s）分段识别：每窗最多 30s，"
+                f"上下文重叠 4s，共 {len(windows)} 段（交界词只保留一次）…"
             )
             return _transcribe_windows(
                 model, wav_path, windows, use_vad=use_vad, edge_pad=overlap * 0.5,
@@ -1622,38 +1635,26 @@ class TranscribeWorker(QObject):
                 f"（设备 {self._local_device}，模型 {getattr(self, '_local_model_name', '?')}）"
             )
             segments, info = None, None
-            # 有合成 sidecar 时不论长短都按片段识别；否则 ≥45s 走 30s 短窗
+            # 有合成 sidecar 时逐片段识别；其余超过 30s 的音轨走短窗。
             merge_hint = _merge_segment_windows(audio, audio_dur)
-            use_chunked = merge_hint is not None or audio_dur >= 45
+            use_chunked = merge_hint is not None or audio_dur > 30
             if use_chunked:
                 chunked = _transcribe_long_chunked(self._local_model, asr_audio, audio_dur)
                 if chunked is not None:
                     segments, info = chunked
             if segments is None:
                 segments, info = transcribe_file(self._local_model, asr_audio)
-            # 覆盖率/密度不足：先关 VAD 整段补跑；长片仍不足再强制分段识别
-            if not _word_density_ok(segments, audio_dur):
-                n_words, last_end, ratio = _coverage_stats(segments, audio_dur)
-                _emit(
-                    f"本地识别覆盖不足（词 {n_words}，末词 {last_end:.1f}s / 音频 {audio_dur:.1f}s，"
-                    f"{ratio * 100:.0f}%），关闭 VAD 整段补跑一次…"
-                )
-                segments2, info2 = transcribe_file(
-                    self._local_model, asr_audio, use_vad=False, label="[补跑]",
-                )
-                if _pick_better_segments(segments, segments2, audio_dur) is segments2:
-                    segments, info = segments2, info2
-                if use_chunked and not _word_density_ok(segments, audio_dur):
-                    _emit("关 VAD 后覆盖仍不足，强制再跑一遍分段识别…")
-                    chunked3 = _transcribe_long_chunked(
-                        self._local_model, asr_audio, audio_dur, use_vad=False,
-                    )
-                    if chunked3 is not None:
-                        segments3, info3 = chunked3
-                        if _pick_better_segments(segments, segments3, audio_dur) is segments3:
-                            segments, info = segments3, info3
+            # Window retries already inspected every interval. Do not replace the
+            # whole result with whichever transcript has the latest final word.
+            if not use_chunked and asr_needs_retry(segments, audio_dur):
+                gaps = asr_gaps(segments, audio_dur)
+                ranges = "、".join(f"{a:.1f}–{b:.1f}s" for a, b in gaps)
+                _emit(f"识别存在待核对空档 {ranges}，关闭 VAD 补识别…")
+                retry, retry_info = transcribe_file(self._local_model, asr_audio, use_vad=False, label="[补识别]")
+                segments = merge_asr_recovery(segments, retry, audio_dur)
+                info = retry_info
         except RuntimeError as exc:
-            if self._local_device != "cuda" or self.cancelled:
+            if self._local_device != "cuda" or self.cancelled or isinstance(exc, CaptionTimingError):
                 raise
             _emit(f"GPU 长视频识别中断，自动改用 CPU INT8 从当前视频重试：{exc}")
             with TranscribeWorker._shared_local_lock:
@@ -1666,29 +1667,31 @@ class TranscribeWorker(QObject):
                 TranscribeWorker._shared_local_model = self._local_model
                 TranscribeWorker._shared_local_model_name = model_name
                 TranscribeWorker._shared_local_device = "cpu"
-            segments, info = transcribe_file(self._local_model, asr_audio)
+            recovered = (_transcribe_long_chunked(self._local_model, asr_audio, audio_dur)
+                         if use_chunked else None)
+            segments, info = recovered or transcribe_file(self._local_model, asr_audio)
         detected = getattr(info, "language", None) or language
         plain = "\n".join(
             normalize_subtitle_text(x["text"], language=detected) for x in segments)
         raw = {"provider": "Local Whisper", "model": self.model,
                "language": detected, "segments": segments,
-               "words": [word for segment in segments for word in segment.get("words", [])]}
+               "words": sorted((word for segment in segments for word in segment.get("words", [])),
+                               key=lambda word: (word["start"], word["end"]))}
         n_words, last_end, ratio = _coverage_stats(segments, audio_dur)
         cover_note = ""
+        unresolved = asr_gaps(segments, audio_dur)
+        if unresolved:
+            ranges = "、".join(f"{a:.1f}–{b:.1f}s" for a, b in unresolved)
+            _emit(f"⚠ 识别后仍有字幕空档：{ranges}（可能是静音或漏识别，请核对；未自动拉长字幕）")
         if audio_dur >= 15:
-            cover_note = f"，末词 {last_end:.1f}s / 音频 {audio_dur:.1f}s（覆盖 {ratio * 100:.0f}%）"
-            if ratio < 0.85:
+            cover_note = f"，末词 {last_end:.1f}s / 音频 {audio_dur:.1f}s"
+            if audio_dur - last_end > max(2.0, min(3.0, audio_dur * 0.05)):
                 _emit(
                     f"⚠ 词轴明显短于音频{cover_note}。若口播未提前结束，请换模型或「重新提取」。"
                 )
         _emit(
             f"本地识别完成：{audio.name}（{len(segments)} 段，{n_words} 词{cover_note}）"
         )
-        try:
-            if prep_wav is not None:
-                shutil.rmtree(prep_wav.parent, ignore_errors=True)
-        except Exception:
-            pass
         return segments_to_srt(segments, language=detected), plain, raw
 
     def _groq_payload_is_suspicious(self, payload: dict, duration: float) -> str:
@@ -1696,6 +1699,14 @@ class TranscribeWorker(QObject):
         text = str(payload.get("text") or "").strip()
         words = payload.get("words") or []
         segments = payload.get("segments") or []
+        from modules.asr_timing import CaptionTimingError, validate_asr_segments
+        try:
+            if not words and not segments:
+                raise CaptionTimingError("缺少词/句时间戳")
+            validate_asr_segments(words, duration)
+            validate_asr_segments(segments, duration)
+        except CaptionTimingError as exc:
+            return str(exc)
         lower = text.casefold()
         # 已知幻觉：把整段口播压成水印/「字幕」二字
         if "authorwave" in lower or "υπότιτλοι" in lower or "υποτιτλοι" in lower:
@@ -1738,11 +1749,15 @@ class TranscribeWorker(QObject):
         segment_seconds = 90
         # 统一抽 mono 16k 再分段，体积更小、Groq 更稳
         # 注意：不要用 0:a:0?（可选映射）——无音轨时会生成 0 流输出却仍 return 0，导致「无 stream」
+        from modules.dynamic_caption_page import caption_media_duration
+        expected_duration = caption_media_duration(self.ffmpeg_path, audio)
         prepared = temp / "groq_source.wav"
         if not prepared.exists() or prepared.stat().st_size < 1000:
             prep = subprocess.run(
                 [self.ffmpeg_path, "-y", "-i", str(audio), "-map", "0:a:0", "-vn",
-                 "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(prepared)],
+                 "-af", "aresample=async=1:first_pts=0",
+                 "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                 "-t", f"{expected_duration:.6f}", str(prepared)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                 creationflags=creation, text=True, encoding="utf-8", errors="replace",
             )
@@ -1760,6 +1775,7 @@ class TranscribeWorker(QObject):
             self.log.emit("正在把长音频切成 90 秒无损识别分段 …")
             cmd = [self.ffmpeg_path, "-y", "-i", str(prepared), "-map", "0:a:0", "-vn", "-f", "segment",
                    "-segment_time", str(segment_seconds), "-reset_timestamps", "1",
+                   "-t", f"{expected_duration:.6f}",
                    "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(pattern)]
             result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                     creationflags=creation, text=True, encoding="utf-8", errors="replace")
@@ -1789,10 +1805,7 @@ class TranscribeWorker(QObject):
             fallback_models.append("whisper-large-v3")
         for number, chunk in enumerate(chunks, 1):
             payload = cache.get(chunk.name)
-            try:
-                chunk_dur = float(video_duration(self.ffmpeg_path, str(chunk)))
-            except Exception:
-                chunk_dur = float(segment_seconds)
+            chunk_dur = caption_media_duration(self.ffmpeg_path, chunk)
             if payload and not self._groq_payload_is_suspicious(payload, chunk_dur):
                 self.log.emit(f"Groq 断点续接：跳过已完成分段 {number}/{len(chunks)}")
             else:
@@ -1826,19 +1839,24 @@ class TranscribeWorker(QObject):
             raw_items.append(payload)
             text = payload.get("text", "").strip()
             texts.append(text)
-            local = payload.get("segments") or []
+            from modules.asr_timing import validate_asr_segments
+            local = validate_asr_segments(payload.get("segments") or [], chunk_dur)
+            checked_words = validate_asr_segments(payload.get("words") or [], chunk_dur)
+            if not local:
+                local = [{**w, "text": w.get("word") or w.get("text") or ""} for w in checked_words]
             for seg in local:
                 all_segments.append({"start": float(seg.get("start", 0)) + offset,
                                      "end": float(seg.get("end", 0)) + offset,
                                      "text": seg.get("text", "")})
-            for word in payload.get("words") or []:
+            for word in checked_words:
                 word_text = str(word.get("word") or word.get("text") or "").strip()
                 if word_text:
                     all_words.append({"start": float(word.get("start", 0)) + offset,
                                       "end": float(word.get("end", 0)) + offset, "text": word_text})
             offset += chunk_dur
         if not all_segments:
-            all_segments = [{"start": 0, "end": max(2, offset), "text": "\n".join(texts)}]
+            from modules.asr_timing import CaptionTimingError
+            raise CaptionTimingError("Groq 未返回有效时间戳，不能自动生成整段字幕")
         lang = None if not self.language or self.language == "auto" else self.language
         plain = "\n".join(normalize_subtitle_text(t, language=lang) for t in texts if t)
         return segments_to_srt(all_segments, language=lang), plain or "\n".join(texts), {
@@ -2022,7 +2040,8 @@ class TranscribeWorker(QObject):
         segments = words_to_segments(payload.get("words", []))
         text = payload.get("text", "").strip()
         if not segments:
-            segments = [{"start": 0, "end": 5, "text": text}]
+            from modules.asr_timing import CaptionTimingError
+            raise CaptionTimingError("ElevenLabs 未返回有效词级时间戳，不能用固定 5 秒代替真实语音时间")
         lang = None if not self.language or self.language == "auto" else self.language
         plain = normalize_subtitle_text(text, language=lang)
         return segments_to_srt(segments, language=lang), plain, {
@@ -5799,14 +5818,18 @@ class MainWindow(QMainWindow):
                     result = worker._process_one(media_path)
                 finally:
                     stop_poll.set()
+                from modules.dynamic_caption_page import caption_media_duration
+                from modules.asr_timing import validate_srt_timing, validate_asr_segments
+                media_dur = caption_media_duration(self._find_ffmpeg(), media_path)
+                result["srt"] = validate_srt_timing(result["srt"], media_dur)
                 raw = result.get("raw") or {}
                 words = raw.get("words") or (raw.get("response") or {}).get("words") or []
                 timed_words = []
                 for word in words:
                     text = str(word.get("text") or word.get("word") or "").strip()
-                    if text and word.get("start") is not None:
-                        timed_words.append({"start": float(word.get("start", 0)),
-                                            "end": float(word.get("end", word.get("start", 0) + .25)), "text": text})
+                    if text and word.get("type") in (None, "word"):
+                        timed_words.append({"start": word.get("start"), "end": word.get("end"), "text": text})
+                timed_words = validate_asr_segments(timed_words, media_dur)
                 precise_srt = segments_to_srt(timed_words) if timed_words else result["srt"]
                 # 质量护栏：词级结果若明显少于句级，优先句级（防坏 words 列表）
                 phrase_count = max(0, str(result.get("srt") or "").count("-->"))
@@ -5832,29 +5855,7 @@ class MainWindow(QMainWindow):
                 except Exception as expand_exc:
                     write_app_log(f"词级估时跳过：{expand_exc}", "WARNING", "字幕识别")
                 # 长音频护栏：整段只出 1～2 条（Gemini 常见）对跟读/语义几乎无用，强制换下一方案
-                media_dur = 0.0
-                try:
-                    from modules.dynamic_caption_page import media_duration
-                    media_dur = float(
-                        media_duration(self._find_ffmpeg(), str(media_path), fallback=0) or 0
-                    )
-                except Exception:
-                    media_dur = 0.0
-                if media_dur <= 0:
-                    # 从字幕末尾估时长
-                    try:
-                        ends = re.findall(
-                            r"-->\s*(\d+):(\d+):(\d+)[,.](\d+)",
-                            str(precise_srt or result.get("srt") or ""),
-                        )
-                        if ends:
-                            h, m, s, ms = ends[-1]
-                            media_dur = (
-                                int(h) * 3600 + int(m) * 60 + int(s)
-                                + int(ms.ljust(3, "0")[:3]) / 1000.0
-                            )
-                    except Exception:
-                        media_dur = 0.0
+                precise_srt = validate_srt_timing(precise_srt, media_dur)
                 cue_n = max(phrase_count, word_count, precise_srt.count("-->"))
                 plain_len = len(str(result.get("original") or "").strip())
                 if media_dur >= 60:
@@ -7286,6 +7287,30 @@ def main():
     QTimer.singleShot(350, lambda: (window.raise_(), window.activateWindow()))
     # 打包后自动化启动检查使用；普通用户启动时不会触发。
     if os.environ.get("VIDEO_TOOLKIT_SMOKE_TEST", "").strip() == "1":
+        # Exercise the packaged dependencies, not only the top-level window.
+        import ctranslate2 as smoke_ct2
+        import onnxruntime as smoke_ort
+        from faster_whisper import WhisperModel as SmokeWhisperModel
+        from modules.asr_timing import CaptionTimingError, validate_srt_timing
+        from modules.caption_qt_burn import paint_caption_overlay_image
+        assert hasattr(smoke_ct2, "StorageView") and smoke_ort.get_available_providers()
+        assert SmokeWhisperModel is not None
+        assert resource_path("VERSION").read_text(encoding="utf-8-sig").strip() == APP_VERSION
+        smoke_srt = "1\n00:00:00,000 --> 00:00:01,000\nΠοια είναι τα πέντε\n"
+        validate_srt_timing(smoke_srt, 1.0)
+        try:
+            validate_srt_timing(smoke_srt.replace("00:00:01,000", "00:01:00,000"), 1.0)
+        except CaptionTimingError:
+            pass
+        else:
+            raise RuntimeError("Packaged caption clock failed to reject an out-of-range timestamp")
+        smoke_image = paint_caption_overlay_image(
+            {"effect": "double_outline", "font": "Arial", "font_size": 82,
+             "word_spacing": -12, "margin_v": 310, "line_width": 86, "max_lines": 2},
+            smoke_srt, smoke_srt, 0.5, size=(270, 480),
+        )
+        assert not smoke_image.isNull() and any(smoke_image.constBits()[3::4])
+        _startup_trace(f"packaged subtitle smoke passed version={APP_VERSION}; Qt paint, ASR clock, Whisper and ONNX ready")
         QTimer.singleShot(1800, app.quit)
     sys.exit(app.exec())
 
