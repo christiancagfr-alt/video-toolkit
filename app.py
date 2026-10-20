@@ -31,6 +31,16 @@ def _startup_trace(message):
         pass
 
 
+if os.environ.get("VIDEO_TOOLKIT_SMOKE_TEST", "").strip() == "1":
+    def _smoke_exception_hook(exc_type, exc_value, exc_traceback):
+        import traceback
+        _startup_trace("".join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+        # A windowed frozen executable otherwise opens an invisible exception
+        # dialog and CI reports a timeout instead of the underlying failure.
+        os._exit(1)
+    sys.excepthook = _smoke_exception_hook
+
+
 _startup_trace("standard imports ready")
 import requests
 _startup_trace("requests ready")
@@ -7323,6 +7333,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="videotoolkit_cut_smoke_") as smoke_temp:
             smoke_root = Path(smoke_temp)
             smoke_source = smoke_root / "long_gop.mp4"
+            _startup_trace(f"smartcut smoke: generating fixture with {smoke_ffmpeg}")
             smoke_run_media([
                 smoke_ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                 "-f", "lavfi", "-i", "color=red:s=160x90:r=25:d=1",
@@ -7333,7 +7344,9 @@ def main():
             ])
             smoke_worker = SmokeCutWorker([], str(smoke_root), "自定义时长序列",
                                          "1", 1, 27, smoke_ffmpeg)
+            _startup_trace("smartcut smoke: fixed-length export")
             assert smoke_worker.fixed_split(str(smoke_source), smoke_root / "fixed") == 2
+            _startup_trace("smartcut smoke: scene detection and export")
             assert smoke_worker.smart_split(str(smoke_source), smoke_root / "scenes") == 2
             for smoke_mode in ("fixed", "scenes"):
                 for smoke_part in (smoke_root / smoke_mode).glob("*.mp4"):
