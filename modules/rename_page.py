@@ -18,7 +18,7 @@ from .path_picker import DropFolderLineEdit
 from .platform_utils import app_data_dir
 
 
-MAX_FILENAME_CHARS = 230
+MAX_FILENAME_CHARS = 255
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 INVALID_FILENAME_TRANS = str.maketrans("", "", INVALID_FILENAME_CHARS)
 WINDOWS_RESERVED_NAMES = {
@@ -48,27 +48,60 @@ def filename_part_changed(value, max_chars=None):
     return clean_filename_part(raw, fallback="", max_chars=max_chars) != raw
 
 
-def safe_filename(filename, parent: Path):
+def filename_component_limit(parent: Path):
+    """Target filesystem limit; Windows counts UTF-16 units, POSIX bytes."""
+    parent = Path(parent).absolute()
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        limit = wintypes.DWORD()
+        if ctypes.windll.kernel32.GetVolumeInformationW(
+                str(parent.anchor), None, 0, None, ctypes.byref(limit), None, None, 0):
+            return int(limit.value) or MAX_FILENAME_CHARS
+    else:
+        while not parent.exists() and parent != parent.parent:
+            parent = parent.parent
+        try:
+            return int(os.pathconf(parent, "PC_NAME_MAX"))
+        except (OSError, ValueError):
+            pass
+    return MAX_FILENAME_CHARS
+
+
+def _filename_units(text):
+    return len(text.encode("utf-16-le")) // 2 if os.name == "nt" else len(os.fsencode(text))
+
+
+def safe_filename(filename, parent: Path, max_chars=None, *, collision_suffix="", reserve_suffix=""):
     source = Path(filename)
     extension = source.suffix
-    stem = clean_filename_part(source.stem)
-    # Modern Python/Qt use Unicode long-path capable file APIs.  Limiting the
-    # title again by the full parent path made perfectly valid titles become
-    # much shorter merely because the selected output folder was deeply nested.
-    # Keep only the per-file safety limit here.
-    maximum = MAX_FILENAME_CHARS - len(extension)
-    if maximum < 12:
-        raise ValueError(f"输出路径过长，请选择更短的输出目录：{parent}")
-    truncated = len(stem) > maximum
-    stem = stem[:maximum].rstrip(" .") or "未命名"
-    if stem.upper() in WINDOWS_RESERVED_NAMES:
-        stem += "_"
-    return stem + extension, truncated
+    original = source.stem
+    stem = clean_filename_part(original)
+    capacity = filename_component_limit(parent) - _filename_units(extension + reserve_suffix)
+    if max_chars is not None:
+        max_chars = int(max_chars)
+        if max_chars < 1:
+            raise ValueError("文件名保留字符数必须至少为 1")
+        stem = stem[:max(0, max_chars - len(collision_suffix))]
+    budget = capacity - _filename_units(collision_suffix)
+    if budget < 0 or (max_chars is not None and len(collision_suffix) > max_chars):
+        raise ValueError("文件名长度限制太小，无法添加防重名编号，请增加保留字符数")
+    while stem and _filename_units(stem) > budget:
+        stem = stem[:-1]
+    stem = stem.rstrip(" .") + collision_suffix
+    if not stem:
+        stem = "_"
+    # Reserved device names also apply before a second dot (e.g. CON.title).
+    if stem.split(".")[0].upper() in WINDOWS_RESERVED_NAMES:
+        stem = "_" + stem[1:]
+    if _filename_units(stem) > capacity:
+        raise ValueError("扩展名过长，无法生成有效文件名")
+    return stem + extension, stem != original
 
 
 class RenameTask:
     def __init__(self, input_dir, output_parent, task_name, prefix, titles, date_str,
-                 suffix, start_index, padding, copy_files, direct_replace=False):
+                 suffix, start_index, padding, copy_files, direct_replace=False, max_chars=None):
         self.input_dir = Path(input_dir)
         self.output_parent = Path(output_parent)
         raw_task_name = task_name.strip() or self.input_dir.name
@@ -77,6 +110,7 @@ class RenameTask:
         self.prefix = clean_filename_part(prefix.strip(), fallback="", max_chars=60) if prefix.strip() else ""
         self.prefix_changed = filename_part_changed(prefix, 60) if prefix.strip() else False
         self.direct_replace = bool(direct_replace)
+        self.max_chars = max_chars
         raw_titles = [x.strip() for x in titles.splitlines() if x.strip()]
         title_limit = None
         self.titles = [clean_filename_part(x, fallback="", max_chars=title_limit) for x in raw_titles]
@@ -103,7 +137,7 @@ class RenameTask:
             raw_title = self.titles[title_index] if 0 <= title_index < len(self.titles) else source.stem
             # 标题列表约定为“不含扩展名的文件名”；若用户恰好粘贴了相同扩展名，避免重复追加。
             base = raw_title[:-len(source.suffix)] if source.suffix and raw_title.casefold().endswith(source.suffix.casefold()) else raw_title
-            result, truncated = safe_filename(base + source.suffix, self.output_folder())
+            result, truncated = safe_filename(base + source.suffix, self.output_folder(), self.max_chars)
             title_changed = self.title_changed[title_index] if 0 <= title_index < len(self.title_changed) else False
             return result, title_changed or truncated
         if self.titles:
@@ -118,7 +152,7 @@ class RenameTask:
             if part: parts.append(part)
         base = "-".join(parts)
         if self.suffix: base += self.suffix if self.suffix.startswith("-") else "-" + self.suffix
-        result, truncated = safe_filename(base + source.suffix, self.output_folder())
+        result, truncated = safe_filename(base + source.suffix, self.output_folder(), self.max_chars)
         return result, changed or truncated
 
 
@@ -141,7 +175,7 @@ class RenameWorker(QObject):
                     if not source.exists():
                         raise FileNotFoundError(f"源文件已不存在：{source}")
                     new_name, adjusted = task.render_name_info(source.name, task.start_index + offset)
-                    destination = unique_destination(output / new_name)
+                    destination = unique_destination(output / new_name, task.max_chars)
                     (shutil.copy2 if task.copy_files else shutil.move)(str(source), str(destination))
                     note = "（已清洗/截断）" if adjusted else ""
                     self.log.emit(f"{source.name}  →  {destination.name}{note}")
@@ -190,16 +224,24 @@ def natural_key(text):
     return [int(x) if x.isdigit() else x.lower() for x in re.split(r"(\d+)", text)]
 
 
-def unique_destination(path: Path):
-    if not path.exists(): return path
+def unique_destination(path: Path, max_chars=None, *, reserve_suffix="", reserved=()):
+    name, _ = safe_filename(path.name, path.parent, max_chars, reserve_suffix=reserve_suffix)
+    path = path.with_name(name)
+    occupied = {os.path.normcase(str(name)) for name in reserved}
+    def available(candidate):
+        return not candidate.exists() and os.path.normcase(candidate.name) not in occupied
+    if available(path):
+        return path
     number = 1
     while True:
         tail = f"_{number}"
-        available = MAX_FILENAME_CHARS - len(path.suffix) - len(tail)
-        if available < 8:
-            raise ValueError(f"输出路径过长，请选择更短的输出目录：{path.parent}")
-        candidate = path.with_name(f"{path.stem[:available].rstrip(' .')}{tail}{path.suffix}")
-        if not candidate.exists(): return candidate
+        if max_chars is not None and len(tail) > max_chars:
+            tail = str(number)
+        name, _ = safe_filename(path.name, path.parent, max_chars,
+                                collision_suffix=tail, reserve_suffix=reserve_suffix)
+        candidate = path.with_name(name)
+        if available(candidate):
+            return candidate
         number += 1
 
 
@@ -252,6 +294,16 @@ class RenamePage(QWidget):
         self.direct_replace = QCheckBox("标题原样替换文件名（不添加编号、前缀、日期和后缀）")
         self.direct_replace.setToolTip("标题列表每一行直接作为对应文件名；只保留原文件扩展名。Windows 不允许的字符仍会自动清理。")
         form.addRow("替换方式", self.direct_replace)
+        length_row = QHBoxLayout()
+        self.name_limit_enabled = QCheckBox("自定义保留字符数")
+        self.name_limit = QSpinBox(); self.name_limit.setRange(1, 255); self.name_limit.setValue(80)
+        self.name_limit.setEnabled(False)
+        length_row.addWidget(self.name_limit_enabled); length_row.addWidget(self.name_limit)
+        length_row.addWidget(QLabel("不含扩展名；未勾选按系统上限"))
+        form.addRow("文件名长度", length_row)
+        self.name_limit_enabled.toggled.connect(self.name_limit.setEnabled)
+        self.name_limit_enabled.toggled.connect(self.update_preview)
+        self.name_limit.valueChanged.connect(self.update_preview)
         self.date_enabled.toggled.connect(self.date.setEnabled)
         self.suffix_enabled.toggled.connect(self.suffix.setEnabled)
         self.direct_replace.toggled.connect(self._direct_replace_changed)
@@ -349,7 +401,9 @@ class RenamePage(QWidget):
             return
         try:
             self.presets[name] = {"prefix": self.prefix.text(), "suffix": self.suffix.text(),
-                                  "suffix_enabled": self.suffix_enabled.isChecked()}
+                                  "suffix_enabled": self.suffix_enabled.isChecked(),
+                                  "name_limit_enabled": self.name_limit_enabled.isChecked(),
+                                  "name_limit": self.name_limit.value()}
             self.persist_presets(); self.refresh_presets(name)
             QMessageBox.information(self, "保存成功", f"前后缀方案“{name}”已保存。")
         except Exception as exc:
@@ -358,6 +412,8 @@ class RenamePage(QWidget):
     def apply_preset(self, name):
         data = self.presets.get(name)
         if data:
+            self.name_limit_enabled.setChecked(bool(data.get("name_limit_enabled", False)))
+            self.name_limit.setValue(int(data.get("name_limit", 80)))
             self.prefix.setText(data.get("prefix", "")); self.suffix.setText(data.get("suffix", ""))
             self.suffix_enabled.setChecked(bool(data.get("suffix_enabled", True))); self.update_preview()
 
@@ -415,7 +471,8 @@ class RenamePage(QWidget):
                           self.titles.toPlainText(), self.date.text() if self.date_enabled.isChecked() else "",
                           self.suffix.text() if self.suffix_enabled.isChecked() else "",
                           self.start_index.value(), self.padding.value(), self.copy.isChecked(),
-                          direct_replace=self.direct_replace.isChecked())
+                          direct_replace=self.direct_replace.isChecked(),
+                          max_chars=self.name_limit.value() if self.name_limit_enabled.isChecked() else None)
 
     def update_preview(self):
         try:
@@ -463,8 +520,13 @@ class RenamePage(QWidget):
             self.preview.setRowCount(0)
             self.preview.setRowCount(file_count)
 
+            reserved = set()
             for offset, item in enumerate(files):
                 name, adjusted = task.render_name_info(item.name, task.start_index + offset)
+                final_name = unique_destination(task.output_folder() / name, task.max_chars, reserved=reserved).name
+                adjusted = adjusted or final_name != name
+                name = final_name
+                reserved.add(name)
                 note = " (已自动清洗/截断)" if adjusted else ""
                 seq = offset + 1
                 title_index = offset  # titles 已去掉空行后的第 N 条对应第 N 个文件

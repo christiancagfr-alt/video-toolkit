@@ -175,7 +175,7 @@ def _safe_set_visible(widget, visible: bool) -> None:
         widget.setVisible(bool(visible))
     except RuntimeError:
         pass
-from .rename_page import clean_filename_part, safe_filename
+from .rename_page import clean_filename_part, safe_filename, unique_destination
 
 
 PRESETS = {
@@ -5391,6 +5391,8 @@ class CaptionWorker(QObject):
                 video_resolved = str(video.resolve())
                 # 批量导出重命名：始终用「当前」重命名面板的最新内容（前缀/标题/日期等）。
                 # 合成阶段可能已命名过；若用户之后改了重命名设置，导出必须按最新规则再命名。
+                name_limit = (int(self.settings.get("rename_name_limit", 80))
+                              if self.settings.get("rename_name_limit_enabled", False) else None)
                 if self.settings.get("rename_enabled"):
                     rename_prefix = self.settings.get("rename_prefix", "").strip()
                     rename_suffix_enabled = self.settings.get("rename_suffix_enabled", True)
@@ -5450,8 +5452,9 @@ class CaptionWorker(QObject):
                     if suffix_part:
                         base += suffix_part if suffix_part.startswith("-") else "-" + suffix_part
 
-                    safe_name, _truncated = safe_filename(base + video.suffix, self.output)
-                    destination = self.output / safe_name
+                    safe_name, _truncated = safe_filename(base + video.suffix, self.output, name_limit)
+                    destination = unique_destination(self.output / safe_name, name_limit)
+                    safe_name = destination.name
                     if video_resolved in already_renamed and destination.name == video.name:
                         self.log.emit(
                             f"[{index + 1}/{len(self.videos)}] 重命名规则未变，沿用：{safe_name}"
@@ -5464,7 +5467,8 @@ class CaptionWorker(QObject):
                         f"[{index + 1}/{len(self.videos)}] 成品重命名：{safe_name}（序号 {seq_str}）"
                     )
                 else:
-                    destination = bounded_output_path(self.output, video.stem, "_动态文案.mp4")
+                    safe_name, _ = safe_filename(video.stem + "_动态文案.mp4", self.output, name_limit)
+                    destination = unique_destination(self.output / safe_name, name_limit)
                 # Keep libass intermediate paths short. Long source titles can exceed
                 # the Windows/libass path limit even when the source video opens fine.
                 ass = None
@@ -9476,6 +9480,16 @@ class DynamicCaptionPage(QWidget):
         rename_num_row.addWidget(self.rename_padding)
         rename_num_row.addStretch()
         rename_form.addRow("序列号配置", rename_num_row)
+        rename_length_row = QHBoxLayout()
+        self.rename_name_limit_enabled = QCheckBox("自定义保留字符数")
+        self.rename_name_limit = QSpinBox()
+        self.rename_name_limit.setRange(1, 255); self.rename_name_limit.setValue(80)
+        self.rename_name_limit.setEnabled(False)
+        self.rename_name_limit_enabled.toggled.connect(self.rename_name_limit.setEnabled)
+        rename_length_row.addWidget(self.rename_name_limit_enabled)
+        rename_length_row.addWidget(self.rename_name_limit)
+        rename_length_row.addWidget(QLabel("不含扩展名；未勾选按系统上限"))
+        rename_form.addRow("文件名长度", rename_length_row)
         
         rename_layout.addLayout(rename_form)
 
@@ -11808,22 +11822,17 @@ class DynamicCaptionPage(QWidget):
                         break
                 title_text = stem or f"合成_{batch_index + 1}"
             base = self._build_auto_rename_basename(batch_index, title_text)
-            safe_name, _truncated = safe_filename(base + src.suffix, src.parent)
+            name_limit = self.rename_name_limit.value() if self.rename_name_limit_enabled.isChecked() else None
+            # Keep segment metadata sidecars valid on the same filesystem.
+            safe_name, _truncated = safe_filename(base + src.suffix, src.parent, name_limit,
+                                                  reserve_suffix=".group_segments.json")
             dest = src.parent / safe_name
             if dest.resolve() == src.resolve():
                 self._already_renamed_videos.add(str(dest.resolve()))
                 new_session.append(str(dest))
                 continue
-            # 目标已存在且不是自己：加序号避免覆盖
-            if dest.exists():
-                stem_only = Path(safe_name).stem
-                n = 1
-                while dest.exists():
-                    alt, _ = safe_filename(f"{stem_only}_{n}{src.suffix}", src.parent)
-                    dest = src.parent / alt
-                    n += 1
-                    if n > 999:
-                        break
+            # Keep collision numbering inside the same length budget.
+            dest = unique_destination(dest, name_limit, reserve_suffix=".group_segments.json")
             try:
                 os.replace(str(src), str(dest))
             except OSError:
@@ -13654,6 +13663,8 @@ class DynamicCaptionPage(QWidget):
             control.valueChanged.connect(self._refresh_live_preview)
             control.valueChanged.connect(self._save_style_preferences)
         self.clean_metadata.toggled.connect(self._save_style_preferences)
+        self.rename_name_limit_enabled.toggled.connect(self._save_style_preferences)
+        self.rename_name_limit.valueChanged.connect(self._save_style_preferences)
         self.rename_enabled.toggled.connect(self._save_style_preferences)
         self.rename_prefix.textChanged.connect(self._save_style_preferences)
         self.rename_date_enabled.toggled.connect(self._save_style_preferences)
@@ -14377,6 +14388,8 @@ class DynamicCaptionPage(QWidget):
             "transition_name": self.transition_name.currentText(),
             "transition_duration": float(self.transition_duration.value()),
             "rename_enabled": self.rename_enabled.isChecked(),
+            "rename_name_limit_enabled": self.rename_name_limit_enabled.isChecked(),
+            "rename_name_limit": self.rename_name_limit.value(),
             "rename_prefix": self.rename_prefix.text(),
             "rename_date_enabled": self.rename_date_enabled.isChecked(),
             "rename_date": self.rename_date.text(),
@@ -14837,6 +14850,8 @@ class DynamicCaptionPage(QWidget):
         for button,label,color in colors:
             if color and re.fullmatch(r"#[0-9A-Fa-f]{6}",str(color)): button.setText(f"{label} {str(color).upper()}")
         self._update_band_color_labels(saved.get("effect") or PRESETS.get(preset, {}).get("effect"))
+        self.rename_name_limit_enabled.setChecked(bool(saved.get("rename_name_limit_enabled", False)))
+        self.rename_name_limit.setValue(int(saved.get("rename_name_limit", 80)))
         if "rename_enabled" in saved:
             self.rename_enabled.setChecked(bool(saved["rename_enabled"]))
         if "rename_prefix" in saved:
@@ -17077,6 +17092,8 @@ class DynamicCaptionPage(QWidget):
                 "transition_name": self.transition_name.currentText(),
                 "transition_duration": float(self.transition_duration.value()),
                 "rename_enabled": self.rename_enabled.isChecked(),
+                "rename_name_limit_enabled": self.rename_name_limit_enabled.isChecked(),
+                "rename_name_limit": self.rename_name_limit.value(),
                 "rename_prefix": self.rename_prefix.text(),
                 "rename_suffix_enabled": self.rename_suffix_enabled.isChecked(),
                 "rename_suffix": self.rename_suffix.text(),

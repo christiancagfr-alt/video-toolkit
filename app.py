@@ -7352,6 +7352,19 @@ def main():
                 for smoke_part in (smoke_root / smoke_mode).glob("*.mp4"):
                     assert abs(probe_video(smoke_ffmpeg, smoke_part).duration - 1) < .05
         _startup_trace(f"packaged smartcut smoke passed version={APP_VERSION}; PyAV scenes and precise FFmpeg cuts ready")
+        rename_page = window.rename_page
+        reels_page = window.dynamic_caption_page
+        assert not rename_page.name_limit_enabled.isChecked()
+        assert not reels_page.rename_name_limit_enabled.isChecked()
+        assert not rename_page.name_limit.isEnabled()
+        assert not reels_page.rename_name_limit.isEnabled()
+        reels_page.rename_name_limit_enabled.setChecked(True)
+        reels_page.rename_name_limit.setValue(36)
+        assert reels_page._style_preferences()["rename_name_limit"] == 36
+        assert reels_page._settings_for_batch_export()["rename_name_limit_enabled"]
+        assert reels_page._settings_for_batch_export()["rename_name_limit"] == 36
+        reels_page.rename_name_limit_enabled.setChecked(False)
+        _startup_trace("packaged naming controls passed; system default and custom export limit ready")
         QTimer.singleShot(1800, app.quit)
     sys.exit(app.exec())
 
