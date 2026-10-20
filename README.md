@@ -2,17 +2,18 @@
 
 一站式桌面视频工作台，将批量截图、智能剪辑、Reels 编辑、批量重命名、元数据清理、字幕提取和自动上传填表集中在同一个 PySide6 界面中。
 
-当前版本：**v1.7.76**
+当前版本：**v1.7.77**
 
 功能总览见 [`docs/FEATURES.md`](docs/FEATURES.md)。
 
-### v1.7.76 · 2026-10-19
+### v1.7.77 · 2026-10-20
 
 - **字幕预览与导出**：语音字幕统一使用 Qt 绘制，长片和密集字幕保持相同字距、换行与样式。
 - **识别时间轴**：检查中间空档并补识别；分段交界词只保留一次；按画面时长校验字幕，拒绝异常超长时间戳。
 - **剪辑同步**：修复裁剪后重提字幕重复偏移、短词被强制拉长、修重叠导致后续字幕越来越晚。
 - **字幕缓存**：增加素材与字幕校验；同名或被替换的素材不再自动复用旧旁路字幕。
 - **元数据水印**：按源码率控制重新编码体积，显示处理前后的文件大小。
+- **本地 Whisper**：补齐安装包中的 CTranslate2 模型模块导出，修复本地识别组件加载失败。
 - 已有错误字幕请重新提取；旧 SRT 可通过「载入 SRT」手动导入。迁移新旁路词轴时请一起复制素材、`.words.srt` 和 `.words.json`。
 
 ### v1.7.75 · 2026-10-16
@@ -155,7 +156,7 @@ BGM/文字配音的切片与时间位置也会合成为独立音轨。分组合�
 
 | 系统 | 安装包 |
 | --- | --- |
-| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.76.zip](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.76/video-toolkit-windows-x64-v1.7.76.zip) · [安装包 Setup](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.76/VideoToolkit_Setup_v1.7.76.exe) |
+| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.77.zip](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.77/video-toolkit-windows-x64-v1.7.77.zip) · [安装包 Setup](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.77/VideoToolkit_Setup_v1.7.77.exe) |
 | Linux x64 | [video-toolkit-linux-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-linux-x64-v1.7.69.zip) |
 | macOS Apple Silicon | [video-toolkit-macos-arm64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-arm64-v1.7.69.zip) |
 | macOS Intel | [video-toolkit-macos-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-x64-v1.7.69.zip) |

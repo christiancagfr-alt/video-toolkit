@@ -112,7 +112,7 @@ jobs:
           }
           $trace = Get-Content $env:VIDEO_TOOLKIT_STARTUP_TRACE -Raw
           Write-Host $trace
-          if ($smokeProcess.ExitCode -ne 0 -or $trace -notmatch 'window shown') {
+          if ($smokeProcess.ExitCode -ne 0 -or $trace -notmatch 'window shown' -or $trace -notmatch 'packaged subtitle smoke passed') {
             throw "Packaged startup failed: $($smokeProcess.ExitCode)"
           }
 

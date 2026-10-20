@@ -47,6 +47,10 @@ from ctranslate2._ext import (  # noqa: E402
     set_random_seed,
 )
 
+# faster-whisper references ctranslate2.models both in annotations during import
+# and when constructing Whisper. Exposing StorageView alone is insufficient.
+from ctranslate2 import models  # noqa: E402,F401
+
 try:
     from ctranslate2.version import __version__
 except Exception:
