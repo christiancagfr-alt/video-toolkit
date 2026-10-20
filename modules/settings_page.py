@@ -25,7 +25,7 @@ PYTHON_COMPONENTS = [
     ("Pillow", "PIL", "Pillow"),
     ("OpenCV", "cv2", "opencv-python"),
     ("yt-dlp", "yt_dlp", "yt-dlp"),
-    ("SceneDetect", "scenedetect", "scenedetect[opencv]"),
+    ("SceneDetect", "scenedetect", "scenedetect[pyav]>=0.7.1,<1"),
 
     ("Requests", "requests", "requests"),
     ("本地 Whisper", "faster_whisper", "faster-whisper"),

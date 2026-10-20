@@ -8,7 +8,7 @@ if [[ -z "$APP_VERSION" ]]; then
   APP_VERSION="$(git -C "$ROOT_DIR" describe --tags --abbrev=0 2>/dev/null || true)"
 fi
 APP_VERSION="${APP_VERSION#v}"
-APP_VERSION="${APP_VERSION:-1.7.77}"
+APP_VERSION="${APP_VERSION:-1.7.78}"
 if [[ ! "$APP_VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
   echo "Invalid application version: $APP_VERSION" >&2
   exit 1
@@ -45,6 +45,8 @@ python -m PyInstaller \
   --hidden-import onnxruntime \
   --hidden-import yt_dlp \
   --hidden-import modules.asr_timing \
+  --hidden-import modules.precise_cut \
+  --hidden-import scenedetect.backends.pyav \
   --hidden-import modules.caption_qt_burn \
   --hidden-import modules.dynamic_caption_page \
   --hidden-import modules.vertical_stack \

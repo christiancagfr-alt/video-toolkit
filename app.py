@@ -49,6 +49,7 @@ from modules.rename_page import RenamePage, RenameTask, natural_key as rename_na
 from modules.screenshot_page import VideoTool as ScreenshotPage
 from modules.settings_page import SettingsPage, component_bin, hidden_kwargs
 from modules.smartcut_page import SmartCutPage, video_duration
+from modules.precise_cut import cut_range, probe_video, scene_ranges
 from modules.watermark_page import MainWindow as WatermarkPage
 from modules.dynamic_caption_page import DynamicCaptionPage, group_word_srt, write_ass
 from modules.tts_page import TtsPage
@@ -86,7 +87,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.77").strip().lstrip("v") or "1.7.77"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.78").strip().lstrip("v") or "1.7.78"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -2594,7 +2595,7 @@ class PipelineWorker(QObject):
 
     def _pipeline_key(self):
         return stable_key({
-            "version": 2,
+            "version": 3,
             "sources": [source_signature(source) for source in self.sources],
             "threshold": self.threshold,
             "rename": {"prefix": self.prefix, "date": self.date_text, "suffix": self.suffix,
@@ -2634,12 +2635,7 @@ class PipelineWorker(QObject):
         atomic_write_json(self.checkpoint_path, self.state)
 
     def _cut_sources(self, clips_dir):
-        try:
-            from scenedetect import ContentDetector, detect
-        except ImportError as exc:
-            raise RuntimeError("缺少智能场景检测组件 scenedetect，请到“设置与组件”一键安装。") from exc
         clips = []
-        creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         for source_number, source_text in enumerate(self.sources, 1):
             source = Path(source_text)
             if self.cancelled: raise RuntimeError("任务已取消")
@@ -2658,28 +2654,19 @@ class PipelineWorker(QObject):
                     pass
             self.log.emit(f"分析画面切换：{source.name}")
             source_audio = probe_audio_layout(self.ffmpeg, str(source))
-            scenes = detect(str(source), ContentDetector(threshold=self.threshold), show_progress=False)
-            if not scenes:
-                duration = video_duration(self.ffmpeg, str(source))
-                scenes = [(0.0, duration)]
-            for scene_number, (start, end) in enumerate(scenes, 1):
-                start_seconds = start.get_seconds() if hasattr(start, "get_seconds") else float(start)
-                end_seconds = end.get_seconds() if hasattr(end, "get_seconds") else float(end)
-                duration = max(0.1, end_seconds - start_seconds)
+            clock = probe_video(self.ffmpeg, source, lambda: self.cancelled)
+            scenes = scene_ranges(source, clock, self.threshold, lambda: self.cancelled)
+            for scene_number, (start_seconds, end_seconds) in enumerate(scenes, 1):
                 destination = clips_dir / f"{source_number:03d}_{scene_number:03d}.mp4"
-                cmd = [self.ffmpeg, "-y", "-ss", f"{start_seconds:.3f}", "-t", f"{duration:.3f}",
-                       "-i", str(source), "-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero", str(destination)]
-                result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                        creationflags=creation, text=True, encoding="utf-8", errors="replace")
-                if result.returncode != 0:
-                    raise RuntimeError(f"智能剪辑失败：{source.name}\n{result.stderr[-500:]}")
+                cut_range(self.ffmpeg, source, destination, start_seconds, end_seconds,
+                          clock, lambda: self.cancelled)
                 output_audio = probe_audio_layout(self.ffmpeg, str(destination))
                 if source_audio and output_audio != source_audio:
                     raise RuntimeError(
                         f"音轨校验失败：{source.name} 为 {source_audio[1]}，"
                         f"但片段 {destination.name} 为 {output_audio[1]}。已停止以避免改变声道。")
                 clips.append(destination)
-                audio_note = f"；音轨保持 {output_audio[1]} / {output_audio[0]}Hz" if output_audio else ""
+                audio_note = f"；声道保持 {output_audio[1]} / {output_audio[0]}Hz" if output_audio else ""
                 self.log.emit(f"已生成片段：{destination.name}{audio_note}")
             source_clips = [path.name for path in clips if path.name.startswith(f"{source_number:03d}_")]
             self.state["cut_completed"][source_key] = source_clips
@@ -3607,7 +3594,10 @@ class DownloadWorker(QObject):
             if ext.lower() not in (".exe", ".zip", ".dmg", ".pkg", ".msi"):
                 self.finished.emit(False, "", f"不支持的更新包扩展名：{ext}")
                 return
-            dest = Path(tempfile.gettempdir()) / f"VideoToolkit_v{safe_ver}{ext}"
+            # Keep concurrent application instances/download attempts separate.
+            # Only a completely validated file receives an executable extension.
+            dest = Path(tempfile.gettempdir()) / f"VideoToolkit_v{safe_ver}_{uuid.uuid4().hex[:12]}{ext}"
+            partial = dest.with_suffix(dest.suffix + ".part")
             headers = {
                 "User-Agent": f"VideoToolkit-Updater/{safe_ver or APP_VERSION}",
                 "Accept": "*/*",
@@ -3640,12 +3630,12 @@ class DownloadWorker(QObject):
                             raise RuntimeError(f"下载被重定向到非发布页主机（{host}），已中止")
                         total = int(response.headers.get("content-length", 0) or 0)
                         downloaded = 0
-                        with open(dest, "wb") as handle:
+                        with open(partial, "wb") as handle:
                             for chunk in response.iter_content(chunk_size=256 * 1024):
                                 if self.cancelled:
                                     try:
                                         handle.close()
-                                        dest.unlink(missing_ok=True)
+                                        partial.unlink(missing_ok=True)
                                     except Exception:
                                         pass
                                     self.finished.emit(False, "", "下载已取消")
@@ -3656,27 +3646,31 @@ class DownloadWorker(QObject):
                                 downloaded += len(chunk)
                                 if total > 0:
                                     self.progress.emit(min(99, int(downloaded / total * 100)))
-                        size = dest.stat().st_size if dest.exists() else 0
+                        size = partial.stat().st_size if partial.exists() else 0
                         if size < 1024 * 100:
                             raise RuntimeError(f"下载文件过小（{size} 字节），可能被拦截或不完整")
-                        if total > 0 and size < int(total * 0.98):
+                        if total > 0 and size != total:
                             raise RuntimeError(
                                 f"下载不完整：已下 {size // (1024 * 1024)} MB /"
                                 f" 预期 {total // (1024 * 1024)} MB"
                             )
                         if ext.lower() == ".exe":
-                            with open(dest, "rb") as probe:
+                            with open(partial, "rb") as probe:
                                 magic = probe.read(2)
                             if magic != b"MZ":
                                 raise RuntimeError("安装包文件损坏或不是 Windows 安装程序，已丢弃")
+                        if self.cancelled:
+                            partial.unlink(missing_ok=True)
+                            self.finished.emit(False, "", "下载已取消")
+                            return
+                        partial.replace(dest)
                         self.progress.emit(100)
                         self.finished.emit(True, str(dest), "")
                         return
                 except Exception as exc:
                     last_error = str(exc)
                     try:
-                        if dest.exists():
-                            dest.unlink(missing_ok=True)
+                        partial.unlink(missing_ok=True)
                     except Exception:
                         pass
                     continue
@@ -7005,7 +6999,6 @@ class MainWindow(QMainWindow):
                 )
                 if reply == QMessageBox.StandardButton.Yes:
                     try:
-                        import subprocess
                         # Never shell=True: path/version must not hit cmd metacharacters.
                         path = str(Path(file_path).resolve())
                         if not path.lower().endswith(".exe"):
@@ -7013,11 +7006,22 @@ class MainWindow(QMainWindow):
                         with open(path, "rb") as probe:
                             if probe.read(2) != b"MZ":
                                 raise RuntimeError("安装包文件损坏或不是 Windows 安装程序")
+                        # finished is delivered to the UI while the worker may
+                        # still be returning from run(). Let its QThread stop
+                        # before closing the application and releasing DLLs.
+                        thread = getattr(self, "_download_thread", None)
+                        if thread is not None and thread.isRunning():
+                            thread.quit()
+                            if not thread.wait(5000):
+                                raise RuntimeError("下载任务尚未退出，请稍后重试安装")
                         if sys.platform.startswith("win"):
                             os.startfile(path)  # type: ignore[attr-defined]
                         else:
                             subprocess.Popen([path], shell=False)
                         self.close()
+                        # Floating editor windows can otherwise keep the old
+                        # executable and Qt DLLs locked during an upgrade.
+                        QApplication.quit()
                     except Exception as e:
                         QMessageBox.warning(
                             self, "运行安装包失败",
@@ -7028,8 +7032,9 @@ class MainWindow(QMainWindow):
                     f"最新版本的绿色免安装压缩包已下载完成！\n\n存储路径：\n{file_path}\n\n请解压后使用新版。"
                 )
                 try:
-                    import os
-                    os.startfile(os.path.dirname(file_path))
+                    from PySide6.QtCore import QUrl
+                    from PySide6.QtGui import QDesktopServices
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(file_path).resolve().parent)))
                 except Exception:
                     pass
         else:
@@ -7311,6 +7316,29 @@ def main():
         )
         assert not smoke_image.isNull() and any(smoke_image.constBits()[3::4])
         _startup_trace(f"packaged subtitle smoke passed version={APP_VERSION}; Qt paint, ASR clock, Whisper and ONNX ready")
+        from modules.precise_cut import run_media as smoke_run_media
+        from modules.smartcut_page import SmartCutWorker as SmokeCutWorker
+        smoke_ffmpeg = shutil.which("ffmpeg")
+        assert smoke_ffmpeg, "Packaged FFmpeg is missing"
+        with tempfile.TemporaryDirectory(prefix="videotoolkit_cut_smoke_") as smoke_temp:
+            smoke_root = Path(smoke_temp)
+            smoke_source = smoke_root / "long_gop.mp4"
+            smoke_run_media([
+                smoke_ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "color=red:s=160x90:r=25:d=1",
+                "-f", "lavfi", "-i", "color=blue:s=160x90:r=25:d=1",
+                "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+                "-map", "[v]", "-c:v", "libx264", "-g", "250", "-sc_threshold", "0",
+                str(smoke_source),
+            ])
+            smoke_worker = SmokeCutWorker([], str(smoke_root), "自定义时长序列",
+                                         "1", 1, 27, smoke_ffmpeg)
+            assert smoke_worker.fixed_split(str(smoke_source), smoke_root / "fixed") == 2
+            assert smoke_worker.smart_split(str(smoke_source), smoke_root / "scenes") == 2
+            for smoke_mode in ("fixed", "scenes"):
+                for smoke_part in (smoke_root / smoke_mode).glob("*.mp4"):
+                    assert abs(probe_video(smoke_ffmpeg, smoke_part).duration - 1) < .05
+        _startup_trace(f"packaged smartcut smoke passed version={APP_VERSION}; PyAV scenes and precise FFmpeg cuts ready")
         QTimer.singleShot(1800, app.quit)
     sys.exit(app.exec())
 

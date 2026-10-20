@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
-import re
+import math
 import shutil
-import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -13,31 +11,14 @@ from PySide6.QtWidgets import (
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter,
     QVBoxLayout, QWidget,
 )
+from .precise_cut import (
+    cut_range, fixed_ranges, frame_aligned_ranges, parse_lengths, probe_video, scene_ranges,
+)
 from .path_picker import DropListWidget, VIDEO_EXTENSIONS, collect_files, default_output_path, load_subfolders
 
 
-def hidden_kwargs():
-    return {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-
-
 def video_duration(ffmpeg: str, path: str) -> float:
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
-        candidate = Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
-        ffprobe = str(candidate) if candidate.exists() else None
-    if ffprobe:
-        result = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", **hidden_kwargs())
-        if result.returncode == 0 and result.stdout.strip():
-            return float(result.stdout.strip())
-    result = subprocess.run([ffmpeg, "-i", path], capture_output=True, text=True,
-                            encoding="utf-8", errors="replace", **hidden_kwargs())
-    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr)
-    if not match:
-        raise RuntimeError("无法获取视频时长")
-    h, m, s = match.groups()
-    return int(h) * 3600 + int(m) * 60 + float(s)
+    return probe_video(ffmpeg, path).duration
 
 
 class SmartCutWorker(QObject):
@@ -63,6 +44,12 @@ class SmartCutWorker(QObject):
         try:
             self.output.mkdir(parents=True, exist_ok=True)
             total = len(self.files)
+            if not total:
+                raise ValueError("请先选择视频文件")
+            if self.mode != "智能画面识别":
+                parse_lengths(self.sequence, self.loop_length)
+            elif not math.isfinite(self.threshold) or not 0 < self.threshold <= 255:
+                raise ValueError("场景阈值必须大于 0 且不超过 255")
             self.log.emit("════════ 智能剪辑开始 ════════")
             self.log.emit(f"文件数：{total}  |  模式：{self.mode}")
             self.log.emit(f"输出目录：{self.output}")
@@ -102,118 +89,53 @@ class SmartCutWorker(QObject):
     def process_one(self, path):
         if self.cancelled:
             raise RuntimeError("用户已取消任务")
-        name = Path(path).name
+        # Reserve a fresh directory atomically. Same-named inputs and reruns must
+        # not overwrite each other or leave old numbered clips mixed with new ones.
         target_dir = self.output / Path(path).stem
-        target_dir.mkdir(parents=True, exist_ok=True)
-        self.log.emit(f"▶ 开始：{name}")
-        try:
-            dur = video_duration(self.ffmpeg, path)
-            self.log.emit(f"  时长：{dur:.2f}s  |  输出子目录：{target_dir.name}")
-        except Exception as exc:
-            self.log.emit(f"  ⚠ 无法读取时长：{exc}（仍尝试处理）")
-            dur = 0.0
+        suffix = 1
+        while True:
+            try:
+                target_dir.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                suffix += 1
+                target_dir = self.output / f"{Path(path).stem}_{suffix}"
+        self.log.emit(f"▶ 开始：{Path(path).name}  |  输出子目录：{target_dir.name}")
+        clock = probe_video(self.ffmpeg, path, lambda: self.cancelled)
+        self.log.emit(f"  画面时长：{clock.duration:.3f}s；按时间戳精确重编码剪辑")
         if self.mode == "智能画面识别":
-            n = self.smart_split(path, target_dir)
+            count = self.smart_split(path, target_dir, clock=clock)
         else:
-            n = self.fixed_split(path, target_dir, total_duration=dur)
-        return n, str(target_dir)
+            count = self.fixed_split(path, target_dir, clock=clock)
+        return count, str(target_dir)
 
-    def smart_split(self, path, target_dir):
-        """智能场景切分：detect + 自调用 ffmpeg，全程 CREATE_NO_WINDOW，不弹黑窗。"""
-        try:
-            from scenedetect import ContentDetector, detect
-        except ImportError as exc:
-            raise RuntimeError("缺少 scenedetect，无法进行智能画面识别") from exc
-        name = Path(path).name
+    def _export_ranges(self, path, target_dir, ranges, clock):
+        count = 0
+        for count, (start, end) in enumerate(ranges, 1):
+            if self.cancelled:
+                raise RuntimeError("用户已取消任务")
+            destination = target_dir / f"{count:03d}.mp4"
+            self.log.emit(f"  [{count}] {start:.3f}s – {end:.3f}s"
+                          f"（{end - start:.3f}s）→ {destination.name}")
+            cut_range(self.ffmpeg, path, destination, start, end, clock, lambda: self.cancelled)
+        self.log.emit(f"  {Path(path).name} 共导出 {count} 段 → {target_dir}")
+        return count
+
+    def smart_split(self, path, target_dir, clock=None):
+        clock = clock or probe_video(self.ffmpeg, path, lambda: self.cancelled)
         self.log.emit(f"  分析画面切换点（阈值={self.threshold}）…")
-        # 不使用 split_video_ffmpeg：其内部会弹控制台窗口
-        scenes = detect(path, ContentDetector(threshold=self.threshold), show_progress=False)
-        if self.cancelled:
-            raise RuntimeError("用户已取消任务")
-        if not scenes:
-            total = video_duration(self.ffmpeg, path)
-            scenes = [(0.0, total)]
-            self.log.emit("  未检测到切换点，整段导出为 1 个片段")
-        else:
-            self.log.emit(f"  检测到 {len(scenes)} 个场景，开始导出…")
-        for scene_number, scene in enumerate(scenes, 1):
-            if self.cancelled:
-                raise RuntimeError("用户已取消任务")
-            if hasattr(scene, "__len__") and len(scene) >= 2:
-                start, end = scene[0], scene[1]
-            else:
-                start, end = scene
-            start_seconds = start.get_seconds() if hasattr(start, "get_seconds") else float(start)
-            end_seconds = end.get_seconds() if hasattr(end, "get_seconds") else float(end)
-            duration = max(0.1, end_seconds - start_seconds)
-            destination = target_dir / f"{scene_number:03d}.mp4"
-            self.log.emit(
-                f"  [{scene_number}/{len(scenes)}] {start_seconds:.2f}s – {end_seconds:.2f}s"
-                f"（{duration:.2f}s）→ {destination.name}"
-            )
-            cmd = [
-                self.ffmpeg, "-y",
-                "-ss", f"{start_seconds:.3f}",
-                "-t", f"{duration:.3f}",
-                "-i", path,
-                "-c", "copy",
-                "-avoid_negative_ts", "make_zero",
-                str(destination),
-            ]
-            result = subprocess.run(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden_kwargs()
-            )
-            if result.returncode != 0:
-                self.log.emit(f"    流复制失败，改用重编码…")
-                # copy 失败时回退重编码（仍静默）
-                cmd_re = [
-                    self.ffmpeg, "-y",
-                    "-ss", f"{start_seconds:.3f}",
-                    "-t", f"{duration:.3f}",
-                    "-i", path,
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                    "-c:a", "aac", "-b:a", "192k",
-                    "-avoid_negative_ts", "make_zero",
-                    str(destination),
-                ]
-                result = subprocess.run(
-                    cmd_re, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden_kwargs()
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(f"智能切分失败：{destination.name}")
-                self.log.emit(f"    已重编码导出 {destination.name}")
-        self.log.emit(f"  {name} 共导出 {len(scenes)} 段 → {target_dir}")
-        return len(scenes)
+        ranges = scene_ranges(path, clock, self.threshold, lambda: self.cancelled)
+        self.log.emit(f"  检测到 {len(ranges)} 个场景，开始精确导出…")
+        return self._export_ranges(path, target_dir, ranges, clock)
 
-    def fixed_split(self, path, target_dir, total_duration=0.0):
-        total = total_duration if total_duration and total_duration > 0 else video_duration(self.ffmpeg, path)
-        sequence = [float(x.strip()) for x in self.sequence.replace("，", ",").split(",") if x.strip()]
-        if not sequence and self.loop_length <= 0:
-            raise RuntimeError("请设置有效的切片时长")
-        name = Path(path).name
-        self.log.emit(f"  按时长序列切片（总长 {total:.2f}s）…")
-        current, index = 0.0, 0
-        while current < total - 0.1:
-            if self.cancelled:
-                raise RuntimeError("用户已取消任务")
-            step = sequence[index] if index < len(sequence) else self.loop_length
-            if step <= 0:
-                raise RuntimeError("每段时长必须大于 0")
-            duration = min(step, total - current)
-            destination = target_dir / f"{index + 1:03d}.mp4"
-            end = current + duration
-            self.log.emit(
-                f"  [{index + 1}] {current:.2f}s – {end:.2f}s（{duration:.2f}s）→ {destination.name}"
-            )
-            cmd = [self.ffmpeg, "-y", "-ss", str(current), "-t", str(duration), "-i", path,
-                   "-c", "copy", "-avoid_negative_ts", "1", str(destination)]
-            result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **hidden_kwargs())
-            if result.returncode != 0:
-                raise RuntimeError(f"切片失败：{destination.name}")
-            current += duration
-            index += 1
-        self.log.emit(f"  {name} 共导出 {index} 段 → {target_dir}")
-        return index
+    def fixed_split(self, path, target_dir, total_duration=0.0, clock=None):
+        # The video stream clock is authoritative; callers may pass a stale or
+        # audio/container duration through the legacy total_duration argument.
+        clock = clock or probe_video(self.ffmpeg, path, lambda: self.cancelled)
+        ranges = fixed_ranges(clock.duration, self.sequence, self.loop_length)
+        ranges = frame_aligned_ranges(self.ffmpeg, path, ranges, clock, lambda: self.cancelled)
+        self.log.emit("  切点对齐到实际画面帧；不足一帧的余量并入相邻片段")
+        return self._export_ranges(path, target_dir, ranges, clock)
 
 
 class SmartCutPage(QWidget):
@@ -231,7 +153,7 @@ class SmartCutPage(QWidget):
         title = QLabel("✂ 智能剪辑")
         title.setObjectName("heading")
         root.addWidget(title)
-        sub = QLabel("支持自定义时长序列与智能场景识别，多文件批量处理。左侧配置，右侧查看运行日志。")
+        sub = QLabel("支持自定义时长序列与智能场景识别，按实际时间精确剪辑。为保证切点准确，导出会重新编码。")
         sub.setStyleSheet("color:#94a3b8;")
         sub.setWordWrap(True)
         root.addWidget(sub)
@@ -361,9 +283,15 @@ class SmartCutPage(QWidget):
             QMessageBox.critical(self, "缺少 FFmpeg", "当前系统未找到 ffmpeg。")
             return
         try:
-            loop = float(self.loop.text()); threshold = float(self.threshold.text())
-        except ValueError:
-            QMessageBox.warning(self, "参数错误", "时长和阈值必须是数字。")
+            if self.mode.currentText() == "智能画面识别":
+                loop, threshold = 30.0, float(self.threshold.text())
+                if not math.isfinite(threshold) or not 0 < threshold <= 255:
+                    raise ValueError("场景阈值必须大于 0 且不超过 255")
+            else:
+                _lengths, loop = parse_lengths(self.sequence.text(), self.loop.text())
+                threshold = 27.0
+        except ValueError as exc:
+            QMessageBox.warning(self, "参数错误", str(exc))
             return
         if getattr(self, "thread", None):
             try:

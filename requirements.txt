@@ -7,7 +7,7 @@ Pillow>=12.3,<13
 pillow-heif>=0.18,<2
 opencv-python>=4.10,<5
 yt-dlp>=2026.7.4
-scenedetect[opencv]>=0.6,<1
+scenedetect[pyav]>=0.7.1,<1
 # moviepy unused in app; omitted to avoid Pillow pin conflicts
 faster-whisper>=1.1,<2
 onnxruntime>=1.20,<2

@@ -115,6 +115,9 @@ jobs:
           if ($smokeProcess.ExitCode -ne 0 -or $trace -notmatch 'window shown' -or $trace -notmatch 'packaged subtitle smoke passed') {
             throw "Packaged startup failed: $($smokeProcess.ExitCode)"
           }
+          if ($trace -notmatch 'packaged smartcut smoke passed') {
+            throw 'Packaged Smart Cut runtime check failed.'
+          }
 
       - name: Package final artifact
         shell: pwsh

@@ -13,7 +13,7 @@ if ([string]::IsNullOrWhiteSpace($version)) {
   $versionFile = Join-Path $root 'VERSION'
   if (Test-Path $versionFile) { $version = (Get-Content -Raw -LiteralPath $versionFile).Trim() }
 }
-if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.77' }
+if ([string]::IsNullOrWhiteSpace($version)) { $version = '1.7.78' }
 $version = $version.Trim().TrimStart('v')
 if ($version -notmatch '^[0-9A-Za-z._-]+$') { throw "Invalid application version: $version" }
 $versionHook = Join-Path $env:TEMP ("video_toolkit_version_" + [guid]::NewGuid().ToString('N') + '.py')
@@ -54,6 +54,8 @@ python -m PyInstaller --clean --noconfirm --windowed --onedir --noupx --contents
   --hidden-import 'charset_normalizer.md' `
   --hidden-import 'charset_normalizer.cd' `
   --hidden-import 'modules.asr_timing' `
+  --hidden-import 'modules.precise_cut' `
+  --hidden-import 'scenedetect.backends.pyav' `
   --hidden-import 'modules.caption_qt_burn' `
   --hidden-import 'modules.dynamic_caption_page' `
   --hidden-import 'modules.vertical_stack' `
