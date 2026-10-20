@@ -216,7 +216,8 @@ def cut_range(ffmpeg, source, destination, start, end, clock=None, cancelled=lam
         "-map", "0:V:0", "-map", "0:a?", "-map_metadata", "0", "-map_chapters", "-1",
         "-vf", video_filter, "-af", audio_filter, "-t", f"{last - first:.9f}",
         "-c:v", "libx264", "-threads:v", "2", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-        "-fps_mode", "vfr", "-enc_time_base:v", "-1",
+        # Use the named source clock: FFmpeg 9 removed the legacy -1 alias.
+        "-fps_mode", "vfr", "-enc_time_base:v", "demux",
         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
         str(temporary),
     ]

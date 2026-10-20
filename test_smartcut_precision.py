@@ -16,7 +16,8 @@ from modules.precise_cut import cut_range, fixed_ranges, parse_lengths, probe_vi
 from modules.smartcut_page import SmartCutWorker
 
 ROOT = Path(__file__).resolve().parent
-FFMPEG = str(ROOT / "tools/ffmpeg/bin/ffmpeg.exe") if os.name == "nt" else shutil.which("ffmpeg")
+FFMPEG = (str(Path(os.environ.get("VIDEO_TOOLKIT_MEDIA_BIN", ROOT / "tools/ffmpeg/bin")) / "ffmpeg.exe")
+          if os.name == "nt" else shutil.which("ffmpeg"))
 FFPROBE = str(Path(FFMPEG).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")) if FFMPEG else ""
 
 
