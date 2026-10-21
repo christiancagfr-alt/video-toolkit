@@ -97,7 +97,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.79").strip().lstrip("v") or "1.7.79"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.80").strip().lstrip("v") or "1.7.80"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -3738,6 +3738,32 @@ class MainWindow(QMainWindow):
         _startup_trace("keys refreshed")
         # 启动后自动在后台静默检查更新（延迟3秒，不阻塞主UI展示）
         QTimer.singleShot(3000, lambda: self._check_update(manual=False))
+    def closeEvent(self, event):
+        # A network request can outlive the last window. Keep the Qt event loop
+        # alive until its worker returns instead of destroying a running QThread.
+        self._closing_for_shutdown = True
+        pending = False
+        for thread_name, worker_name in (("_update_thread", "_update_worker"),
+                                         ("_download_thread", "_download_worker")):
+            thread = getattr(self, thread_name, None)
+            try:
+                if thread is not None and thread.isRunning():
+                    worker = getattr(self, worker_name, None)
+                    if worker is not None and hasattr(worker, "cancel"):
+                        worker.cancel()
+                    thread.requestInterruption()
+                    thread.quit()
+                    pending = True
+            except RuntimeError:
+                pass
+        if pending:
+            event.ignore()
+            QTimer.singleShot(100, self.close)
+            return
+        super().closeEvent(event)
+        if getattr(self, "_quit_after_network_close", False):
+            QTimer.singleShot(0, QApplication.quit)
+
     def _build_ui(self):
         root = QWidget()
         self.setCentralWidget(root)
@@ -6853,6 +6879,8 @@ class MainWindow(QMainWindow):
 
 
     def _check_update(self, manual=False):
+        if getattr(self, "_closing_for_shutdown", False):
+            return
         thread = getattr(self, "_update_thread", None)
         if thread is not None:
             try:
@@ -6877,6 +6905,8 @@ class MainWindow(QMainWindow):
         self._update_thread.start()
 
     def _on_update_finished(self, has_new, latest_version, download_url, filename, error):
+        if getattr(self, "_closing_for_shutdown", False):
+            return
         manual = getattr(self, "_update_manual_check", False)
         error_text = str(error or "").strip()
         # 防御：历史上若槽参数错位，会把 zip/exe 文件名当成 error 弹出「检测失败」
@@ -6998,6 +7028,8 @@ class MainWindow(QMainWindow):
             self._download_worker.cancelled = True
 
     def _on_download_finished(self, success, file_path, error):
+        if getattr(self, "_closing_for_shutdown", False):
+            return
         if success:
             is_exe = str(file_path).lower().endswith(".exe")
             if is_exe:
@@ -7028,10 +7060,10 @@ class MainWindow(QMainWindow):
                             os.startfile(path)  # type: ignore[attr-defined]
                         else:
                             subprocess.Popen([path], shell=False)
-                        self.close()
-                        # Floating editor windows can otherwise keep the old
-                        # executable and Qt DLLs locked during an upgrade.
-                        QApplication.quit()
+                        self._quit_after_network_close = True
+                        if self.close():
+                            # Floating editors must not keep old Qt DLLs locked.
+                            QApplication.quit()
                     except Exception as e:
                         QMessageBox.warning(
                             self, "运行安装包失败",
@@ -7365,7 +7397,7 @@ def main():
         assert reels_page._settings_for_batch_export()["rename_name_limit"] == 36
         reels_page.rename_name_limit_enabled.setChecked(False)
         _startup_trace("packaged naming controls passed; system default and custom export limit ready")
-        QTimer.singleShot(1800, app.quit)
+        QTimer.singleShot(1800, window.close)
     sys.exit(app.exec())
 
 

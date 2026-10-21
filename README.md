@@ -2,11 +2,14 @@
 
 一站式桌面视频工作台，将批量截图、智能剪辑、Reels 编辑、批量重命名、元数据清理、字幕提取和自动上传填表集中在同一个 PySide6 界面中。
 
-当前版本：**v1.7.79**
+当前版本：**v1.7.80**
 
 功能总览见 [`docs/FEATURES.md`](docs/FEATURES.md)。
 
-### v1.7.79 · 2026-10-20
+### v1.7.80 · 2026-10-21
+
+- **文件名长度**：批量重命名和 Reels 批量导出新增「自定义保留字符数」；默认按系统上限，勾选后限制文件名正文，保留扩展名并自动处理重名。
+- **Windows 打包**：修复 FFmpeg 9 剪辑参数兼容性；退出时等待后台更新线程结束，避免退出崩溃。
 
 - **智能剪辑**：时长序列、场景识别与自动流水线统一精确重编码，切点对齐实际画面帧，避免关键帧偏移和片段重叠；支持可变帧率与非零起始时间。
 - **片尾与批处理**：保留有效短片尾，不足一帧的余量并入相邻片段；同名素材和重复任务使用独立输出目录，取消任务时及时停止处理。
@@ -163,7 +166,7 @@ BGM/文字配音的切片与时间位置也会合成为独立音轨。分组合�
 
 | 系统 | 安装包 |
 | --- | --- |
-| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.79.zip](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.79/video-toolkit-windows-x64-v1.7.79.zip) · [安装包 Setup](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.79/VideoToolkit_Setup_v1.7.79.exe) |
+| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.80.zip](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.80/video-toolkit-windows-x64-v1.7.80.zip) · [安装包 Setup](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.80/VideoToolkit_Setup_v1.7.80.exe) |
 | Linux x64 | [video-toolkit-linux-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-linux-x64-v1.7.69.zip) |
 | macOS Apple Silicon | [video-toolkit-macos-arm64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-arm64-v1.7.69.zip) |
 | macOS Intel | [video-toolkit-macos-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-x64-v1.7.69.zip) |

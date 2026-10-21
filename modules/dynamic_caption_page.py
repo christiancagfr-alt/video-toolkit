@@ -9484,12 +9484,15 @@ class DynamicCaptionPage(QWidget):
         self.rename_name_limit_enabled = QCheckBox("自定义保留字符数")
         self.rename_name_limit = QSpinBox()
         self.rename_name_limit.setRange(1, 255); self.rename_name_limit.setValue(80)
-        self.rename_name_limit.setEnabled(False)
+        self.rename_name_limit.setEnabled(False); self.rename_name_limit.setFixedWidth(90)
         self.rename_name_limit_enabled.toggled.connect(self.rename_name_limit.setEnabled)
         rename_length_row.addWidget(self.rename_name_limit_enabled)
         rename_length_row.addWidget(self.rename_name_limit)
-        rename_length_row.addWidget(QLabel("不含扩展名；未勾选按系统上限"))
+        rename_length_row.addStretch()
         rename_form.addRow("文件名长度", rename_length_row)
+        rename_length_hint = QLabel("不含扩展名；未勾选时按系统允许的最大长度。")
+        rename_length_hint.setWordWrap(True)
+        rename_form.addRow("", rename_length_hint)
         
         rename_layout.addLayout(rename_form)
 

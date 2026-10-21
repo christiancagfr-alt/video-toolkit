@@ -88,6 +88,37 @@ class InstallerLaunchTests(unittest.TestCase):
         warning.assert_called_once()
 
 
+class NetworkShutdownTests(unittest.TestCase):
+    def test_close_waits_for_background_update_without_blocking_ui(self):
+        import time
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QApplication, QMainWindow
+        app = QApplication.instance() or QApplication([])
+        app.setQuitOnLastWindowClosed(False)
+
+        class TestWindow(toolkit.MainWindow):
+            def __init__(self):
+                QMainWindow.__init__(self)
+
+        def delayed_check(worker):
+            time.sleep(0.35)
+            worker.finished.emit(False, "", "", "", "simulated slow network")
+
+        window = TestWindow()
+        window.show()
+        with patch.object(toolkit.UpdateCheckWorker, "run", delayed_check):
+            window._check_update(manual=True)
+            QTest.qWait(30)
+            start = time.monotonic()
+            self.assertFalse(window.close())
+            self.assertLess(time.monotonic() - start, 0.15)
+            self.assertTrue(window.isVisible())
+            QTest.qWait(700)
+            self.assertFalse(window.isVisible())
+            self.assertIsNone(window._update_thread)
+        window.deleteLater()
+
+
 class FakeResponse:
     url = URL
 
