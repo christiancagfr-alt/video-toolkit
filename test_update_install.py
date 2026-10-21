@@ -64,6 +64,18 @@ class InstallerLaunchTests(unittest.TestCase):
         self.window.close.assert_not_called()
         warning.assert_called_once()
 
+    def test_background_update_must_finish_before_launching_installer(self):
+        thread = Mock()
+        thread.isRunning.return_value = True
+        thread.wait.return_value = False
+        self.window._update_thread = thread
+        launcher = Mock()
+        warning, quit_app = self.invoke(launcher)
+        thread.wait.assert_called_once_with(5000)
+        launcher.assert_not_called()
+        quit_app.assert_not_called()
+        warning.assert_called_once()
+
     def test_declined_install_does_not_launch_or_exit(self):
         launcher = Mock()
         warning, quit_app = self.invoke(launcher, toolkit.QMessageBox.StandardButton.No)

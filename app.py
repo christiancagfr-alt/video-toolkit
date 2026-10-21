@@ -7056,6 +7056,11 @@ class MainWindow(QMainWindow):
                             thread.quit()
                             if not thread.wait(5000):
                                 raise RuntimeError("下载任务尚未退出，请稍后重试安装")
+                        update_thread = getattr(self, "_update_thread", None)
+                        if update_thread is not None and update_thread.isRunning():
+                            update_thread.quit()
+                            if not update_thread.wait(5000):
+                                raise RuntimeError("更新检查尚未结束，请稍后重试安装")
                         if sys.platform.startswith("win"):
                             os.startfile(path)  # type: ignore[attr-defined]
                         else:
