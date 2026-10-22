@@ -2,9 +2,14 @@
 
 一站式桌面视频工作台，将批量截图、智能剪辑、Reels 编辑、批量重命名、元数据清理、字幕提取和自动上传填表集中在同一个 PySide6 界面中。
 
-当前版本：**v1.7.80**
+当前版本：**v1.7.81**
 
 功能总览见 [`docs/FEATURES.md`](docs/FEATURES.md)。
+
+### v1.7.81 · 2026-10-22
+
+- **批量重命名兼容性**：使用普通文件读写复制，避免部分挂载卷的 CopyFile2 兼容问题；支持 Windows 长路径。
+- **文件保护与诊断**：复制中断保留源文件，重名不覆盖；失败时显示具体步骤和源、目标路径。
 
 ### v1.7.80 · 2026-10-21
 
@@ -166,7 +171,7 @@ BGM/文字配音的切片与时间位置也会合成为独立音轨。分组合�
 
 | 系统 | 安装包 |
 | --- | --- |
-| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.80.zip](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.80/video-toolkit-windows-x64-v1.7.80.zip) · [安装包 Setup](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.80/VideoToolkit_Setup_v1.7.80.exe) |
+| Windows 10/11 x64 | [video-toolkit-windows-x64-v1.7.81.zip](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.81/video-toolkit-windows-x64-v1.7.81.zip) · [安装包 Setup](https://github.com/christiancagfr-alt/video-toolkit/releases/download/v1.7.81/VideoToolkit_Setup_v1.7.81.exe) |
 | Linux x64 | [video-toolkit-linux-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-linux-x64-v1.7.69.zip) |
 | macOS Apple Silicon | [video-toolkit-macos-arm64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-arm64-v1.7.69.zip) |
 | macOS Intel | [video-toolkit-macos-x64-v1.7.69.zip](https://github.com/secure-artifacts/video-toolkit/releases/download/v1.7.69/video-toolkit-macos-x64-v1.7.69.zip) |

@@ -61,7 +61,7 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest test_smartcut_precision test_update_install test_filename_limits -v
+        run: python -m unittest test_smartcut_precision test_update_install test_filename_limits test_rename_transfer -v
 
       - name: Build portable application
         shell: pwsh

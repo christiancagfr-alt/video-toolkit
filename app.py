@@ -97,7 +97,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.80").strip().lstrip("v") or "1.7.80"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.81").strip().lstrip("v") or "1.7.81"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 from .path_picker import DropFolderLineEdit
 from .platform_utils import app_data_dir
+from .file_transfer import filesystem_path, transfer_file
 
 
 MAX_FILENAME_CHARS = 255
@@ -163,26 +164,37 @@ class RenameWorker(QObject):
         super().__init__(); self.tasks = tasks
 
     def run(self):
+        stage, source, destination = "检查任务", None, None
         try:
             for task_no, task in enumerate(self.tasks):
-                if not task.input_dir.is_dir():
-                    raise FileNotFoundError(f"源文件夹已不存在：{task.input_dir}")
-                if not task.output_parent.is_dir():
-                    raise FileNotFoundError(f"输出父目录已不存在：{task.output_parent}")
-                output = task.output_folder(); output.mkdir(parents=True, exist_ok=True)
-                files = sorted((x for x in task.input_dir.iterdir() if x.is_file()), key=lambda x: natural_key(x.name))
+                stage = "检查源目录"
+                source, destination = task.input_dir, task.output_folder()
+                input_dir = filesystem_path(task.input_dir)
+                if not input_dir.is_dir():
+                    raise FileNotFoundError(f"源文件夹不存在或磁盘尚未挂载：{task.input_dir}")
+                stage = "检查输出目录"
+                if not filesystem_path(task.output_parent).is_dir():
+                    raise FileNotFoundError(f"输出父目录不存在或磁盘尚未挂载：{task.output_parent}")
+                stage = "创建输出目录"
+                output = filesystem_path(task.output_folder())
+                output.mkdir(parents=True, exist_ok=True)
+                stage = "读取源文件列表"
+                files = sorted((x for x in input_dir.iterdir() if x.is_file()), key=lambda x: natural_key(x.name))
                 for offset, source in enumerate(files):
-                    if not source.exists():
-                        raise FileNotFoundError(f"源文件已不存在：{source}")
+                    stage = "生成目标文件名"
                     new_name, adjusted = task.render_name_info(source.name, task.start_index + offset)
-                    destination = unique_destination(output / new_name, task.max_chars)
-                    (shutil.copy2 if task.copy_files else shutil.move)(str(source), str(destination))
+                    destination = output / new_name
+                    destination = unique_destination(destination, task.max_chars)
+                    stage = "复制文件" if task.copy_files else "移动文件"
+                    transfer_file(source, destination, move=not task.copy_files, warn=self.log.emit)
                     note = "（已清洗/截断）" if adjusted else ""
                     self.log.emit(f"{source.name}  →  {destination.name}{note}")
                 self.progress.emit(round((task_no + 1) / len(self.tasks) * 100))
             self.finished.emit(True, "全部重命名任务已完成")
         except Exception as exc:
-            self.finished.emit(False, str(exc))
+            message = f"{stage}失败：{exc}\n源路径：{source}\n目标路径：{destination}"
+            self.log.emit(message)
+            self.finished.emit(False, message)
 
 
 class SmartTitleWorker(QObject):
