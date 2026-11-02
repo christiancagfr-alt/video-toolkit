@@ -1,19 +1,22 @@
-PySide6>=6.8,<7
-requests>=2.31,<3
-chardet>=5,<6
-# 3.4.x Cython/mypyc 扩展在 PyInstaller+UPX 下易启动失败；打包已禁用 UPX 并 collect-all
-charset-normalizer>=3.3,<4
-Pillow>=12.3,<13
-pillow-heif>=0.18,<2
-opencv-python>=4.10,<5
-yt-dlp>=2026.7.4
-scenedetect[pyav]>=0.7.1,<1
-# moviepy unused in app; omitted to avoid Pillow pin conflicts
-faster-whisper>=1.1,<2
-onnxruntime>=1.20,<2
-deep-translator>=1.11.4,<2
-google-api-python-client>=2,<3
-google-auth>=2,<3
-google-auth-oauthlib>=1,<2
-edge-tts>=7,<8
-cryptography>=48,<51
+# Stable releases audited against PyPI on 2026-11-02.
+# Reproducible direct dependencies; refresh deliberately and run packaged checks.
+PySide6==6.12.0
+requests==2.34.2
+chardet==7.7.0
+charset-normalizer==3.5.2
+Pillow==13.0.0
+pillow-heif==1.8.1
+opencv-python==5.0.0.93
+yt-dlp==2026.10.26
+scenedetect[pyav]==0.7.2
+faster-whisper==1.2.1
+onnxruntime==1.31.1
+deep-translator==1.11.4
+google-api-python-client==2.201.0
+google-auth==2.62.0
+google-auth-oauthlib==1.5.0
+edge-tts==7.3.1
+cryptography==50.0.2
+av==19.0.2
+ctranslate2==4.8.4
+numpy==2.5.4

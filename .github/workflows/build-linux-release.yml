@@ -51,7 +51,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
+          python -m pip install --upgrade --upgrade-strategy eager -r requirements-build.txt
+          python -m pip check
+          python -m pip freeze
 
       - name: Embed version from tag
         run: |

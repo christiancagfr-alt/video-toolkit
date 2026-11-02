@@ -59,7 +59,7 @@ from modules.rename_page import RenamePage, RenameTask, natural_key as rename_na
 from modules.screenshot_page import VideoTool as ScreenshotPage
 from modules.settings_page import SettingsPage, component_bin, hidden_kwargs
 from modules.smartcut_page import SmartCutPage, video_duration
-from modules.precise_cut import cut_range, probe_video, scene_ranges
+from modules.precise_cut import cut_range, probe_video, scene_ranges, compatible_audio_streams
 from modules.watermark_page import MainWindow as WatermarkPage
 from modules.dynamic_caption_page import DynamicCaptionPage, group_word_srt, write_ass
 from modules.tts_page import TtsPage
@@ -97,7 +97,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.81").strip().lstrip("v") or "1.7.81"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.82").strip().lstrip("v") or "1.7.82"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -455,12 +455,16 @@ def response_error(resp: requests.Response) -> str:
         return resp.text[:500] or f"HTTP {resp.status_code}"
 
 
-def probe_audio_layout(ffmpeg_path: str, media_path: str):
+def probe_audio_layout(ffmpeg_path: str, media_path: str, stream_index=None):
     creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     result = subprocess.run([ffmpeg_path, "-hide_banner", "-i", str(media_path)],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             creationflags=creation, text=True, encoding="utf-8", errors="replace")
-    match = re.search(r"Audio:.*?,\s*(\d+)\s*Hz,\s*([^,\r\n]+)", result.stderr)
+    diagnostic = result.stderr
+    if stream_index is not None:
+        diagnostic = "\n".join(line for line in diagnostic.splitlines()
+                               if re.search(rf"Stream #0:{stream_index}(?:\D|$)", line))
+    match = re.search(r"Audio:.*?,\s*(\d+)\s*Hz,\s*([^,\r\n]+)", diagnostic)
     return (int(match.group(1)), match.group(2).strip()) if match else None
 
 
@@ -1399,6 +1403,8 @@ class TranscribeWorker(QObject):
             return segments, info
 
         def _transcribe_file_once(model, path, *, offset=0.0, beam_size=None, use_vad=None, label=""):
+            from modules.whisper_audio import load_whisper_audio
+            samples = load_whisper_audio(self.ffmpeg_path, path, lambda: self.cancelled)
             try:
                 import onnxruntime  # noqa: F401
                 vad_default = True
@@ -1416,7 +1422,7 @@ class TranscribeWorker(QObject):
                     beam_size = 1
             try:
                 stream, info = model.transcribe(
-                    str(path),
+                    samples,
                     language=language,
                     beam_size=beam_size,
                     best_of=1,
@@ -1437,7 +1443,7 @@ class TranscribeWorker(QObject):
                     raise
                 _emit("VAD 组件不可用，已关闭静音过滤并自动重试当前片段。")
                 stream, info = model.transcribe(
-                    str(path), language=language, beam_size=1, best_of=1,
+                    samples, language=language, beam_size=1, best_of=1,
                     temperature=0.0, vad_filter=False, word_timestamps=True,
                     condition_on_previous_text=False,
                 )
@@ -2663,13 +2669,15 @@ class PipelineWorker(QObject):
                 except OSError:
                     pass
             self.log.emit(f"分析画面切换：{source.name}")
-            source_audio = probe_audio_layout(self.ffmpeg, str(source))
+            selected_audio = compatible_audio_streams(self.ffmpeg, source, lambda: self.cancelled, self.log.emit)
+            source_audio = (probe_audio_layout(self.ffmpeg, str(source), selected_audio[0])
+                            if selected_audio else None)
             clock = probe_video(self.ffmpeg, source, lambda: self.cancelled)
             scenes = scene_ranges(source, clock, self.threshold, lambda: self.cancelled)
             for scene_number, (start_seconds, end_seconds) in enumerate(scenes, 1):
                 destination = clips_dir / f"{source_number:03d}_{scene_number:03d}.mp4"
                 cut_range(self.ffmpeg, source, destination, start_seconds, end_seconds,
-                          clock, lambda: self.cancelled)
+                          clock, lambda: self.cancelled, warn=self.log.emit)
                 output_audio = probe_audio_layout(self.ffmpeg, str(destination))
                 if source_audio and output_audio != source_audio:
                     raise RuntimeError(
@@ -5909,7 +5917,8 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 if (cancel_flag and cancel_flag()) or "取消" in str(exc):
                     raise RuntimeError("任务已取消") from exc
-                message = f"{provider} 调用失败（可能是配额、密钥或网络问题）：{exc}；自动切换下一方案"
+                reason = "本地引擎或音频处理失败" if provider == LOCAL_PROVIDER else "调用失败"
+                message = f"{provider} {reason}：{exc}；自动切换下一方案"
                 errors.append(message); write_app_log(message, "WARNING", "字幕识别")
         if cancel_flag and cancel_flag():
             raise RuntimeError("任务已取消")
@@ -7347,6 +7356,27 @@ def main():
         from modules.caption_qt_burn import paint_caption_overlay_image
         assert hasattr(smoke_ct2, "StorageView") and smoke_ort.get_available_providers()
         assert SmokeWhisperModel is not None
+        from modules.whisper_audio import load_whisper_audio
+        import wave as smoke_wave
+        import numpy as smoke_np
+        with tempfile.TemporaryDirectory(prefix="whisper_decode_smoke_") as audio_temp:
+            audio_fixture = Path(audio_temp) / "română.wav"
+            audio_samples = (smoke_np.sin(smoke_np.arange(16000) * 2 * smoke_np.pi * 440 / 16000) * 12000).astype("<i2")
+            with smoke_wave.open(str(audio_fixture), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(16000)
+                wav.writeframes(audio_samples.tobytes())
+            decoded = load_whisper_audio(shutil.which("ffmpeg"), audio_fixture)
+            assert decoded.shape == (16000,) and decoded.dtype == smoke_np.float32
+            assert float(smoke_np.abs(decoded).max()) > 0.3
+        from faster_whisper.tokenizer import _LANGUAGE_CODES as smoke_languages
+        assert "ro" in smoke_languages
+        _startup_trace("packaged Whisper real audio decode passed; Romanian language supported")
+        if os.environ.get("VIDEO_TOOLKIT_WHISPER_TEST_MODEL"):
+            from tools.packaging.verify_whisper_inference import verify as verify_whisper
+            verify_whisper(os.environ["VIDEO_TOOLKIT_WHISPER_TEST_MODEL"], shutil.which("ffmpeg"))
+            _startup_trace("packaged Whisper actual inference passed; Romanian with and without VAD")
         assert resource_path("VERSION").read_text(encoding="utf-8-sig").strip() == APP_VERSION
         smoke_srt = "1\n00:00:00,000 --> 00:00:01,000\nΠοια είναι τα πέντε\n"
         validate_srt_timing(smoke_srt, 1.0)

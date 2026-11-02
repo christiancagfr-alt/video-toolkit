@@ -52,12 +52,45 @@ class VideoClock:
     fps: float
 
 
-def _probe_command(ffmpeg):
+def _probe_command(ffmpeg, streams="V:0"):
     sibling = Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
     ffprobe = str(sibling) if sibling.is_file() else shutil.which("ffprobe")
     if not ffprobe:
         raise RuntimeError("缺少 FFprobe，无法校验精确剪辑时间")
-    return [ffprobe, "-v", "error", "-select_streams", "V:0"]
+    return [ffprobe, "-v", "error", "-select_streams", streams]
+
+
+def compatible_audio_streams(ffmpeg, source, cancelled=lambda: False, warn=lambda message: None):
+    """Keep decodable audio tracks; never turn unsupported audio into silence."""
+    data = json.loads(run_media(_probe_command(ffmpeg, "a") + [
+        "-show_entries", "stream=index,codec_name,codec_tag_string", "-of", "json",
+        str(source)], cancelled))
+    streams = data.get("streams", [])
+    if not streams:
+        return []
+    codecs = run_media([str(ffmpeg), "-hide_banner", "-codecs"], cancelled).decode("utf-8", "replace")
+    supported = set()
+    for line in codecs.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and len(fields[0]) == 6 and fields[0][0] == "D" and fields[0][2] == "A":
+            supported.add(fields[1])
+    selected, skipped = [], []
+    for stream in streams:
+        codec = stream.get("codec_name", "unknown")
+        # Older probes can confuse Apple's MOV 'apac' tag with Marian's
+        # unrelated A-pac decoder. Never send that track to Marian's decoder.
+        apple_tag = stream.get("codec_tag_string") == "apac"
+        if codec in supported and not (apple_tag and codec != "apple_apac"):
+            selected.append(int(stream["index"]))
+        else:
+            skipped.append(f"#{stream['index']} ({codec}, {stream.get('codec_tag_string', '')})")
+    if not selected:
+        raise RuntimeError("视频有音轨，但当前 FFmpeg 无法解码：" + ", ".join(skipped)
+                           + "。请先将音频转换为 AAC/PCM 后重试；未生成无声视频。")
+    if skipped:
+        warn("已跳过不支持的附加音轨：" + ", ".join(skipped)
+             + "；保留可用音轨：" + ", ".join(map(str, selected)))
+    return selected
 
 
 def _video_packets(ffmpeg, path, cancelled):
@@ -193,12 +226,15 @@ def scene_ranges(path, clock, threshold, cancelled=lambda: False):
     return list(zip(boundaries, boundaries[1:]))
 
 
-def cut_range(ffmpeg, source, destination, start, end, clock=None, cancelled=lambda: False):
+def cut_range(ffmpeg, source, destination, start, end, clock=None, cancelled=lambda: False,
+              warn=lambda message: None):
     clock = clock or probe_video(ffmpeg, source, cancelled)
     if not all(math.isfinite(value) for value in (start, end)):
         raise ValueError("剪辑时间必须是有限数字")
     if start < 0 or end <= start or end > clock.duration + 1e-6:
         raise ValueError("剪辑区间超出视频画面范围")
+    audio_streams = compatible_audio_streams(ffmpeg, source, cancelled, warn)
+    audio_maps = [item for index in audio_streams for item in ("-map", f"0:{index}")]
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.stem}.{uuid.uuid4().hex}.partial.mp4")
@@ -213,7 +249,7 @@ def cut_range(ffmpeg, source, destination, start, end, clock=None, cancelled=lam
         str(ffmpeg), "-hide_banner", "-loglevel", "error", "-nostdin", "-xerror", "-y",
         "-copyts", "-seek_timestamp", "1", "-ss", f"{first:.9f}", "-noaccurate_seek",
         "-i", str(source),
-        "-map", "0:V:0", "-map", "0:a?", "-map_metadata", "0", "-map_chapters", "-1",
+        "-map", "0:V:0", *audio_maps, "-map_metadata", "0", "-map_chapters", "-1",
         "-vf", video_filter, "-af", audio_filter, "-t", f"{last - first:.9f}",
         "-c:v", "libx264", "-threads:v", "2", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
         # Use the named source clock: FFmpeg 9 removed the legacy -1 alias.

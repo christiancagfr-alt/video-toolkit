@@ -117,7 +117,8 @@ class SmartCutWorker(QObject):
             destination = target_dir / f"{count:03d}.mp4"
             self.log.emit(f"  [{count}] {start:.3f}s – {end:.3f}s"
                           f"（{end - start:.3f}s）→ {destination.name}")
-            cut_range(self.ffmpeg, path, destination, start, end, clock, lambda: self.cancelled)
+            cut_range(self.ffmpeg, path, destination, start, end, clock, lambda: self.cancelled,
+                      warn=self.log.emit)
         self.log.emit(f"  {Path(path).name} 共导出 {count} 段 → {target_dir}")
         return count
 

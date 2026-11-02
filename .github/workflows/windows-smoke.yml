@@ -22,7 +22,9 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
+          python -m pip install --upgrade --upgrade-strategy eager -r requirements-build.txt
+          python -m pip check
+          python -m pip freeze
 
       - name: Download FFmpeg and FFprobe
         shell: pwsh
@@ -32,8 +34,8 @@ jobs:
           # gyan.dev 偶发 503；依次尝试多个镜像，带重试
           $urls = @(
             'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
-            'https://github.com/GyanD/codexffmpeg/releases/download/8.0/ffmpeg-8.0-essentials_build.zip',
-            'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+            'https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip',
+            'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip'
           )
           $ok = $false
           foreach ($url in $urls) {
@@ -61,7 +63,17 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest test_smartcut_precision test_update_install test_filename_limits test_rename_transfer -v
+        run: python -m unittest test_smartcut_precision test_update_install test_filename_limits test_rename_transfer test_whisper_audio -v
+
+      - name: Verify actual Whisper inference and Romanian support
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:VIDEO_TOOLKIT_MEDIA_BIN;$env:PATH"
+          $modelDir = Join-Path $env:RUNNER_TEMP 'whisper-tiny-test'
+          $env:VIDEO_TOOLKIT_WHISPER_TEST_MODEL = $modelDir
+          python tools/packaging/verify_whisper_inference.py
+          if ($LASTEXITCODE -ne 0) { throw 'Whisper inference validation failed' }
+          "VIDEO_TOOLKIT_WHISPER_TEST_MODEL=$modelDir" >> $env:GITHUB_ENV
 
       - name: Build portable application
         shell: pwsh

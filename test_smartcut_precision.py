@@ -39,6 +39,38 @@ def frame_times(path):
     return np.array([float(frame["best_effort_timestamp_time"]) for frame in data["frames"]])
 
 
+class AudioCompatibilityTests(unittest.TestCase):
+    def select(self, streams, codecs=b" DEA.L. aac AAC\n D.AI.S apac Marian\n"):
+        from modules.precise_cut import compatible_audio_streams
+        messages = []
+        with patch("modules.precise_cut._probe_command", return_value=["ffprobe"]), patch("modules.precise_cut.run_media", side_effect=[json.dumps({"streams": streams}).encode(), codecs]):
+            selected = compatible_audio_streams("ffmpeg", "input.mov", warn=messages.append)
+        return selected, messages
+
+    def test_skips_apple_audio_in_any_position_and_preserves_other_tracks(self):
+        for index in [1, 3]:
+            selected, messages = self.select([
+                {"index": index, "codec_name": "apple_apac", "codec_tag_string": "apac"},
+                {"index": 2, "codec_name": "aac"}, {"index": 4, "codec_name": "aac"}])
+            self.assertEqual(selected, [2, 4])
+            self.assertIn("apple_apac", messages[0])
+
+    def test_old_probe_does_not_confuse_apac_decoders(self):
+        with self.assertRaisesRegex(RuntimeError, "未生成无声视频"):
+            self.select([{"index": 1, "codec_name": "apac", "codec_tag_string": "apac"}])
+
+    def test_unknown_audio_is_not_silently_discarded(self):
+        with self.assertRaisesRegex(RuntimeError, "无法解码"):
+            self.select([{"index": 1, "codec_tag_string": "apac"}])
+
+    def test_no_audio_is_valid(self):
+        self.assertEqual(self.select([])[0], [])
+
+    def test_future_apple_decoder_is_supported(self):
+        self.assertEqual(self.select([{"index": 1, "codec_name": "apple_apac", "codec_tag_string": "apac"}],
+                                     b" D.A.L. apple_apac Apple\n")[0], [1])
+
+
 class LengthValidationTests(unittest.TestCase):
     def test_nonfinite_and_nonpositive_lengths_are_rejected_before_export(self):
         for sequence, loop in [("nan", 1), ("inf", 1), ("-1", 1), ("0", 1), ("1", 0),
@@ -78,6 +110,21 @@ class PreciseCutMediaTests(unittest.TestCase):
         self.assertEqual(len(actual), len(expected))
         error = np.abs(actual.astype(float) - expected.astype(float)).mean(axis=(1, 2, 3))
         self.assertLess(float(error.max()), 5.0, error.tolist())
+
+    def test_real_mov_with_unsupported_first_audio_keeps_audible_aac(self):
+        source = self.root / "dual-audio.mov"
+        ffmpeg("-i", self.source, "-map", "0:v", "-map", "0:a", "-map", "0:a", "-c", "copy", source)
+        raw = source.read_bytes()
+        self.assertIn(b"mp4a", raw)
+        # Synthetic unsupported sample entry; payload is AAC, not real APAC.
+        source.write_bytes(raw.replace(b"mp4a", b"apac", 1))
+        dest = self.root / "compatible.mp4"
+        messages = []
+        cut_range(FFMPEG, source, dest, 1.2, 2.4, warn=messages.append)
+        audio = ffmpeg("-i", dest, "-map", "0:a:0", "-f", "f32le", "-ac", "1", "-")
+        self.assertGreater(float(np.abs(np.frombuffer(audio, dtype=np.float32)).max()), 0.1)
+        self.assertFrameColors(frames(dest), self.original[30:60])
+        self.assertTrue(messages)
 
     def test_video_duration_does_not_follow_longer_audio(self):
         self.assertAlmostEqual(self.clock.duration, 3.64, places=4)
