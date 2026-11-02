@@ -58,6 +58,7 @@ jobs:
           $ffprobe = Get-ChildItem -LiteralPath $extract -Recurse -File -Filter 'ffprobe.exe' | Select-Object -First 1
           if (-not $ffmpeg -or -not $ffprobe) { throw 'FFmpeg package is incomplete.' }
           "VIDEO_TOOLKIT_MEDIA_BIN=$($ffmpeg.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $ffmpeg.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify cutting and update regressions with bundled FFmpeg
         shell: pwsh
