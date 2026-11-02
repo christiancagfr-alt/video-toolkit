@@ -110,8 +110,7 @@ class MediaIntegrityTests(unittest.TestCase):
         calls, logs = [], []
         class FakeModel:
             def transcribe(self, path, **kwargs):
-                with wave.open(str(path)) as wav:
-                    duration = wav.getnframes() / wav.getframerate()
+                duration = len(path) / 16000
                 calls.append((duration, kwargs["vad_filter"]))
                 words = responder(duration, kwargs["vad_filter"])
                 result = SimpleNamespace(start=0., end=duration, text=" ".join(w.text for w in words),

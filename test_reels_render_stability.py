@@ -26,8 +26,8 @@ from modules import dynamic_caption_page as d
 from modules import metadata_page as meta
 
 ROOT = Path(__file__).resolve().parent
-FFMPEG = str(ROOT / "tools/ffmpeg/bin/ffmpeg.exe")
-FFPROBE = str(ROOT / "tools/ffmpeg/bin/ffprobe.exe")
+FFMPEG = str(Path(os.environ.get("VIDEO_TOOLKIT_MEDIA_BIN", ROOT / "tools/ffmpeg/bin")) / "ffmpeg.exe")
+FFPROBE = str(Path(FFMPEG).with_name("ffprobe.exe"))
 APP = QApplication.instance() or QApplication([])
 GREEK = "Ποια είναι τα πέντε πιο επικίνδυνα αμαρτήματα"
 STYLE = dict(preset="双描边大字幕", effect="double_outline", font="Arial", font_size=82,
@@ -59,9 +59,8 @@ class AsrTimingTests(unittest.TestCase):
         calls = []
         class FakeModel:
             def transcribe(self, path, **kwargs):
-                with wave.open(str(path)) as wav:
-                    duration = wav.getnframes() / wav.getframerate()
-                calls.append((Path(path).name, kwargs["vad_filter"], duration))
+                duration = len(path) / 16000
+                calls.append(("samples", kwargs["vad_filter"], duration))
                 # Model simulation: VAD returns only the first half of each
                 # window; retry returns the actual remaining words.
                 limit = duration / 2 if kwargs["vad_filter"] else duration

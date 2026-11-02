@@ -1429,12 +1429,16 @@ def caption_media_duration(ffmpeg, path):
     return duration
 
 
-def validate_srt_for_media(srt, source, ffmpeg=None):
+def validate_srt_for_media(srt, source, ffmpeg=None, *, repair_tail=False, log=lambda message: None):
     from .asr_timing import validate_srt_timing
     if not ffmpeg:
         from .settings_page import find_media_tool
         ffmpeg = find_media_tool("ffmpeg")
-    return validate_srt_timing(srt, caption_media_duration(ffmpeg, source))
+    duration = caption_media_duration(ffmpeg, source)
+    if repair_tail:
+        from .asr_timing import reconcile_export_tail
+        return reconcile_export_tail(srt, duration, log)
+    return validate_srt_timing(srt, duration)
 
 
 def media_duration(ffmpeg, path, fallback=8.0):
@@ -5192,6 +5196,8 @@ class CaptionWorker(QObject):
                 chinese = ""
                 burn_captions = False
                 fresh_product_clock = False
+                word_clock_aligned = False
+                phrase_clock_aligned = False
 
                 if self.settings.get("caption_mode") == "自由文案动画（不对口型）":
                     video_key = str(video.resolve())
@@ -5277,6 +5283,7 @@ class CaptionWorker(QObject):
                             )
                             if override_try and "-->" in override_try:
                                 phrase_srt = override_try
+                                phrase_clock_aligned = bool(edit_state.get("captions_timeline_aligned"))
                                 word_srt = ""
                                 burn_captions = True
                                 original = " ".join(t for _, _, t in parse_srt(phrase_srt)) or video.stem
@@ -5286,9 +5293,12 @@ class CaptionWorker(QObject):
                             else:
                                 raise RuntimeError(f"未识别到有效字幕：{caption_audio.name}")
                     else:
-                        clock_media = (render_video if edit_state.get("captions_timeline_aligned") or fresh_product_clock
-                                       else caption_audio)
-                        srt = validate_srt_for_media(srt, clock_media, self.ffmpeg)
+                        # A source sidecar never inherits the workspace's product-clock flag.
+                        word_clock_aligned = bool((saved_word_srt and edit_state.get("captions_timeline_aligned"))
+                                                  or fresh_product_clock)
+                        phrase_clock_aligned = word_clock_aligned
+                        clock_media = render_video if word_clock_aligned else caption_audio
+                        srt = validate_srt_for_media(srt, clock_media, self.ffmpeg, repair_tail=True, log=self.log.emit)
                         word_srt = srt
                         phrase_srt = group_word_srt(word_srt, self.settings["line_length"] * 2,
                                                     max_words=self.settings.get("max_words", 8))
@@ -5306,6 +5316,7 @@ class CaptionWorker(QObject):
                         if override:
                             if "-->" in override:
                                 phrase_srt = override
+                                phrase_clock_aligned = bool(edit_state.get("captions_timeline_aligned"))
                                 self.log.emit("已应用人工修订后的逐句 SRT，逐词时间轴继续驱动高亮。")
                             else:
                                 phrase_srt = replace_srt_copy(phrase_srt, override)
@@ -5320,9 +5331,8 @@ class CaptionWorker(QObject):
                                 f"（时间轴/预览中的文案仅供临时查看）。"
                             )
                 if burn_captions and self.settings.get("caption_mode") != "自由文案动画（不对口型）":
-                    clock_media = (render_video if edit_state.get("captions_timeline_aligned") or fresh_product_clock
-                                   else caption_audio)
-                    phrase_srt = validate_srt_for_media(phrase_srt, clock_media, self.ffmpeg)
+                    clock_media = render_video if phrase_clock_aligned else caption_audio
+                    phrase_srt = validate_srt_for_media(phrase_srt, clock_media, self.ffmpeg, repair_tail=True, log=self.log.emit)
                 # 字幕时钟处理（二选一，禁止「先平移再切片映射」造成双重偏移）：
                 # 1) 有视频轨切片 → 从源时钟（或未对齐工作副本）按片段映射到成片
                 # 2) 仅有文案里的手动起止 → 简单平移
@@ -5338,33 +5348,21 @@ class CaptionWorker(QObject):
                     phrase_src = _lookup_settings_map(
                         self.settings.get("timeline_overrides_source"), source_key, vkey, caption_audio, video,
                     )
-                    aligned = bool(edit_state.get("captions_timeline_aligned") or fresh_product_clock)
                     need = video_segments_need_caption_retime(video_segs)
-                    working_phrase_ok = bool(phrase_srt and "-->" in phrase_srt)
-                    if aligned:
-                        # 工作副本已是成片时钟（含校对后的新文字）→ 直接烧录，禁止再用源轴旧字覆盖
-                        caption_retiming_done = True
+                    before_p, before_w = phrase_srt, word_srt
+                    if need:
+                        if not phrase_clock_aligned:
+                            phrase_srt = retime_srt_for_video_segments(phrase_srt or phrase_src, video_segs)
+                        if not word_clock_aligned:
+                            word_srt = retime_srt_for_video_segments(word_srt or word_src, video_segs)
+                    caption_retiming_done = bool(need or phrase_clock_aligned or word_clock_aligned)
+                    if phrase_srt != before_p or word_srt != before_w:
                         self.log.emit(
-                            f"[{index + 1}/{len(self.videos)}] 字幕已按成片时钟对齐，"
-                            f"使用当前工作区文案烧录（含校对修订）。"
+                            f"[{index + 1}/{len(self.videos)}] 已按时间轴视频切片重映射源字幕"
+                            f"（{len(video_segs)} 段）；已对齐工作区的文案保留原时钟。"
                         )
-                    elif need and aligned and not (word_src or phrase_src):
-                        caption_retiming_done = True
-                    elif need and (word_src or phrase_src or not aligned):
-                        # 未对齐：优先工作区文案（校对后），再回退源轴
-                        base_p = phrase_srt if working_phrase_ok else phrase_src
-                        base_w = word_srt if (word_srt and "-->" in word_srt) else word_src
-                        before_p, before_w = phrase_srt, word_srt
-                        if base_p and "-->" in base_p:
-                            phrase_srt = retime_srt_for_video_segments(base_p, video_segs)
-                        if base_w and "-->" in base_w:
-                            word_srt = retime_srt_for_video_segments(base_w, video_segs)
-                        caption_retiming_done = True
-                        if phrase_srt != before_p or word_srt != before_w:
-                            self.log.emit(
-                                f"[{index + 1}/{len(self.videos)}] 已按时间轴视频切片重映射字幕"
-                                f"（{len(video_segs)} 段，源时钟→成片），对齐裁剪后的口播。"
-                            )
+                    elif phrase_clock_aligned or word_clock_aligned:
+                        self.log.emit(f"[{index + 1}/{len(self.videos)}] 字幕已按成片时钟对齐，保留当前工作区校对文案。")
                 if burn_captions and (not caption_retiming_done) and manual_bounds is not None:
                     v_start, v_end = manual_bounds
                     if v_end > v_start:

@@ -81,6 +81,52 @@ def validate_srt_timing(srt, duration):
     return result
 
 
+def reconcile_export_tail(srt, duration, log=lambda message: None):
+    """Repair bounded EOF drift in existing captions, without shifting any cue.
+
+    Recognition validation remains strict. This is only for an existing/export
+    timeline: at most 1 second (and 5% of media), with starts at most 200ms past
+    EOF. A wholly invalid timeline is never accepted as an empty success.
+    """
+    try:
+        return validate_srt_timing(srt, duration)
+    except CaptionTimingError as original_error:
+        original = original_error
+    duration = float(duration)
+    if not math.isfinite(duration) or duration <= 0:
+        raise original
+    canonical = validate_srt_timing(srt, None)  # syntax/order/finite spans first
+    limit = min(1.0, duration * .05)
+    blocks = re.split(r"\n\s*\n", canonical.strip().replace("\r\n", "\n"))
+    kept, clipped, dropped = [], 0, 0
+    for block in blocks:
+        lines = block.splitlines()
+        index = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if index is None:
+            raise original
+        stamps = re.findall(r"(\d+):(\d+):(\d+),(\d+)", lines[index])
+        start, end = [int(h)*3600 + int(m)*60 + int(s) + int(ms)/1000
+                      for h, m, s, ms in stamps]
+        if end > duration + limit + 1e-6 or start > duration + min(.2, limit) + 1e-6:
+            raise original
+        if start >= duration or round(start*1000) >= round(duration*1000):
+            dropped += 1
+            continue
+        if end > duration:
+            clipped += 1
+            ms = round(duration * 1000)
+            h, ms = divmod(ms, 3600000)
+            m, ms = divmod(ms, 60000)
+            sec, ms = divmod(ms, 1000)
+            lines[index] = lines[index].split("-->")[0] + f"--> {h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+        kept.append("\n".join([str(len(kept)+1), *lines[index:]]))
+    if not kept:
+        raise original
+    result = validate_srt_timing("\n\n".join(kept) + "\n", duration)
+    log(f"字幕片尾边界修正：媒体 {duration:.3f}s；截短 {clipped} 条，移除片尾外 {dropped} 条；其余时间戳保持不变。")
+    return result
+
+
 def asr_gaps(segments, duration, min_gap=1.5):
     """Uncovered intervals, including the middle; gaps are NOT proof of speech."""
     spans = []

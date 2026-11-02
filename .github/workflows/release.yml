@@ -90,7 +90,7 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest test_smartcut_precision test_update_install test_filename_limits test_rename_transfer test_whisper_audio -v
+        run: python -m unittest test_smartcut_precision test_update_install test_filename_limits test_rename_transfer test_whisper_audio test_caption_export_tail test_asr_timing_integrity test_reels_render_stability -v
 
       - name: Verify actual Whisper inference and Romanian support
         shell: pwsh
