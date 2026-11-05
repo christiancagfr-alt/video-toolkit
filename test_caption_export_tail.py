@@ -8,6 +8,21 @@ from test_reels_render_stability import APP, FFMPEG, STYLE, ffmpeg, d, probe
 
 
 class ExportTailTests(unittest.TestCase):
+    def test_new_reported_bounds_and_known_workspace_clock(self):
+        for duration,start,end in [(30.629,30.783,31.203),(7.049,7.508,7.733),
+                                   (15.721,15.896,16.165)]:
+            srt=d.events_to_srt([(1,2,"keep"),(start,end,"tail")])
+            state={"tracks":{"video":[{"start":0,"end":round(end*1000)}]}}
+            with patch.object(d,"caption_media_duration",return_value=duration):
+                fixed=d.validate_export_srt(srt,"baked.mp4",FFMPEG,aligned=True,state=state)
+                self.assertEqual(d.parse_srt(fixed),[(1,2,"keep")])
+        # Short-video excess is only accepted with evidence of the edited clock.
+        srt=d.events_to_srt([(1,2,"keep"),(7.508,7.733,"tail")])
+        with patch.object(d,"caption_media_duration",return_value=7.049):
+            for aligned,state in [(False,state),(True,{}),(True,{"tracks":{"video":[{"end":20000}]}})]:
+                with self.assertRaises(CaptionTimingError):
+                    d.validate_export_srt(srt,"baked.mp4",FFMPEG,aligned=aligned,state=state)
+
     def test_reported_bounds_preserve_earlier_cues(self):
         for duration, start, end in [(17.497,17.626,17.895), (27.399,27.438,28.160),
                                      (120,119.539,120.436), (127.067,127.020,127.390)]:
@@ -77,6 +92,24 @@ class ExportTailTests(unittest.TestCase):
             self.assertTrue(outcomes[-1][0],outcomes)
             self.assertEqual(d.parse_srt(timelines[-1][0])[-1],(5.8,6.,"tail"))
             self.assertTrue(any("片尾边界修正" in line for line in logs))
+
+            # Legacy workspace extends beyond actual source EOF: the bake is
+            # shorter, but earlier corrected captions must retain their clock.
+            srt=d.events_to_srt([(1,2,"keep"),(6.4,6.65,"tail")])
+            state=dict(captions_timeline_aligned=True,tracks={"video":[
+                dict(start=0,end=6700,source_start=0,source_end=6700)]})
+            worker=d.CaptionWorker([source],[],root/"workspace",FFMPEG,None,
+                dict(STYLE,word_timelines={key:srt},timeline_overrides={key:srt},
+                     timeline_edits={key:state}))
+            worker._encoder_diag_done=True
+            outcomes=[]; timelines=[]; logs=[]
+            worker.finished.connect(lambda *args:outcomes.append(args))
+            worker.timeline_ready.connect(lambda _,words,phrases:timelines.append((words,phrases)))
+            worker.log.connect(logs.append)
+            worker._run_all_failfast()
+            self.assertTrue(outcomes[-1][0],outcomes)
+            self.assertEqual(d.parse_srt(timelines[-1][0]),[(1,2,"keep")])
+            self.assertTrue(any("工作区字幕边界对齐" in line for line in logs))
 
 
 if __name__ == "__main__":

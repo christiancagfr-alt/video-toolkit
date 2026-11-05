@@ -97,7 +97,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.83").strip().lstrip("v") or "1.7.83"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.84").strip().lstrip("v") or "1.7.84"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -1278,9 +1278,22 @@ class TranscribeWorker(QObject):
                     "或在源码环境执行：pip install -U --force-reinstall ctranslate2 faster-whisper）。"
                 )
             from faster_whisper import WhisperModel
-        except ImportError as exc:
+        except (ImportError, OSError) as exc:
+            import traceback
+            detail = f"{type(exc).__name__}: {exc}"
+            write_app_log(
+                f"本地 Whisper 组件加载失败；版本={APP_VERSION}\n{traceback.format_exc()}",
+                "ERROR", "字幕识别",
+            )
+            if getattr(sys, "frozen", False):
+                advice = (
+                    "请使用完整安装包重新安装，或将完整便携包解压到新文件夹后运行；"
+                    "安装版无需运行 pip。若仍失败，请提供下方原始错误及软件日志。"
+                )
+            else:
+                advice = "源码环境请使用运行本程序的 Python 安装 requirements.txt 中的依赖。"
             raise RuntimeError(
-                "缺少本地字幕组件，请运行：pip install -U faster-whisper ctranslate2"
+                f"本地 Whisper 组件加载失败（尚未开始识别）。{advice} 原始错误：{detail}"
             ) from exc
         model_name = str(self.model or DEFAULT_MODELS[LOCAL_PROVIDER]).strip() or "medium"
         # 兼容界面展示名

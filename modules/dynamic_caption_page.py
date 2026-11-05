@@ -1441,6 +1441,32 @@ def validate_srt_for_media(srt, source, ffmpeg=None, *, repair_tail=False, log=l
     return validate_srt_timing(srt, duration)
 
 
+def validate_export_srt(srt, source, ffmpeg, *, aligned=False, state=None, log=lambda message: None):
+    """Validate the workspace clock before clipping a slightly shorter bake."""
+    from .asr_timing import CaptionTimingError, validate_srt_timing
+    try:
+        return validate_srt_for_media(srt, source, ffmpeg, repair_tail=True, log=log)
+    except CaptionTimingError as exc:
+        actual = caption_media_duration(ffmpeg, source)
+        segments = ((state or {}).get("tracks") or {}).get("video") or []
+        declared = max((float(s.get("end", 0)) / 1000 for s in segments), default=0)
+        # Only a known edited workspace clock authorizes this fallback. Source
+        # caches and fresh ASR must never be stretched or silently accepted.
+        if not aligned or not segments or not 0 < declared - actual <= 1.0:
+            raise CaptionTimingError(f"{exc}（校验媒体：{Path(source).name}；字幕时钟：{'工作区' if aligned else '素材'}）") from exc
+        canonical = validate_srt_timing(srt, declared)
+        entries = parse_srt(canonical)
+        kept = [(start, min(end, actual), text) for start, end, text in entries
+                if round(start * 1000) < round(actual * 1000)]
+        if not kept:
+            raise exc
+        result = validate_srt_timing(events_to_srt(kept), actual)
+        log(f"工作区字幕边界对齐：编辑轴 {declared:.3f}s，实际画面 {actual:.3f}s；"
+            f"截短 {sum(start < actual < end for start, end, _ in entries)} 条，"
+            f"移除片尾外 {len(entries)-len(kept)} 条；其余时间不变。")
+        return result
+
+
 def media_duration(ffmpeg, path, fallback=8.0):
     """读取媒体时长；失败时返回用于预览的安全默认值。"""
     ffmpeg_path = Path(ffmpeg)
@@ -5298,7 +5324,8 @@ class CaptionWorker(QObject):
                                                   or fresh_product_clock)
                         phrase_clock_aligned = word_clock_aligned
                         clock_media = render_video if word_clock_aligned else caption_audio
-                        srt = validate_srt_for_media(srt, clock_media, self.ffmpeg, repair_tail=True, log=self.log.emit)
+                        srt = validate_export_srt(srt, clock_media, self.ffmpeg, aligned=word_clock_aligned and not fresh_product_clock,
+                                                  state=edit_state, log=self.log.emit)
                         word_srt = srt
                         phrase_srt = group_word_srt(word_srt, self.settings["line_length"] * 2,
                                                     max_words=self.settings.get("max_words", 8))
@@ -5332,7 +5359,8 @@ class CaptionWorker(QObject):
                             )
                 if burn_captions and self.settings.get("caption_mode") != "自由文案动画（不对口型）":
                     clock_media = render_video if phrase_clock_aligned else caption_audio
-                    phrase_srt = validate_srt_for_media(phrase_srt, clock_media, self.ffmpeg, repair_tail=True, log=self.log.emit)
+                    phrase_srt = validate_export_srt(phrase_srt, clock_media, self.ffmpeg, aligned=phrase_clock_aligned,
+                                                     state=edit_state, log=self.log.emit)
                 # 字幕时钟处理（二选一，禁止「先平移再切片映射」造成双重偏移）：
                 # 1) 有视频轨切片 → 从源时钟（或未对齐工作副本）按片段映射到成片
                 # 2) 仅有文案里的手动起止 → 简单平移
@@ -20905,12 +20933,6 @@ class DynamicCaptionPage(QWidget):
         except Exception as stack_exc:
             self._append_run_log(f"上下拼接自动续接失败：{stack_exc}")
             self._pending_vertical_stack = None
-        # 一批批量导出结束后清空自定义标题，避免下一批误用上一批文案、重复命名。
-        if ok and hasattr(self, "rename_custom_titles") and not getattr(self, "_pending_vertical_stack", None):
-            previous = self.rename_custom_titles.toPlainText().strip()
-            self.rename_custom_titles.clear()
-            if previous:
-                self._append_run_log("本批导出完成，已清空「自定义标题列表」；下一批请重新粘贴文案。")
         if ok and self.cloud_sync_check.isChecked():
             files=[item["path"] for item in self.generated_records if Path(item.get("path","")).is_file()]
             if files and callable(self.cloud_sync_callable):
@@ -20932,6 +20954,12 @@ class DynamicCaptionPage(QWidget):
             and len(completed_products) == self._batch_expected_count
             and all(path.is_file() and path.stat().st_size > 1024 for path in completed_products)
         )
+        # 一批批量导出结束后清空自定义标题，避免下一批误用上一批文案、重复命名。
+        if all_products_ready and hasattr(self, "rename_custom_titles") and not getattr(self, "_pending_vertical_stack", None):
+            previous = self.rename_custom_titles.toPlainText().strip()
+            self.rename_custom_titles.clear()
+            if previous:
+                self._append_run_log("本批导出完成，已清空「自定义标题列表」；下一批请重新粘贴文案。")
         if all_products_ready:
             self._remove_successfully_exported_queue()
             cleanup = cleanup_successful_render_artifacts(
