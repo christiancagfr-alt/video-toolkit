@@ -18603,6 +18603,7 @@ class DynamicCaptionPage(QWidget):
             external = self._timeline_key(self._caption_source_for_video(key)) != key
             prev_video = caption_clock_segments(prev, external)
             new_video = caption_clock_segments(state, external)
+            self._capture_missing_caption_sources(key, prev, external)
             state["captions_timeline_aligned"] = bool(prev.get("captions_timeline_aligned"))
             self.timeline_edit_states[key] = state
             # 仅当视频轨片段（源入出点/段数）变化时重映射字幕，避免拖动字幕条时被冲掉
@@ -19456,6 +19457,22 @@ class DynamicCaptionPage(QWidget):
         if key not in self.timeline_overrides_source and self.timeline_overrides.get(key):
             self.timeline_overrides_source[key] = self.timeline_overrides[key]
 
+    def _capture_missing_caption_sources(self, key, previous_state, external=False):
+        """Capture against the OLD edit clock, before replacing it with new cuts."""
+        for current_name, source_name in (("timeline_words", "timeline_words_source"),
+                                           ("timeline_overrides", "timeline_overrides_source")):
+            snapshots = getattr(self, source_name, None)
+            if snapshots is None:
+                snapshots = {}; setattr(self, source_name, snapshots)
+            text = getattr(self, current_name, {}).get(key, "")
+            if snapshots.get(key) or not text:
+                continue
+            if previous_state.get("captions_timeline_aligned"):
+                segments = caption_clock_segments(previous_state, external)
+                snapshots[key] = restore_source_caption_clock(text, "", segments) if segments else text
+            else:
+                snapshots[key] = text
+
     def _sync_captions_after_video_edit(self, key: str, state: dict | None = None):
         """视频轨裁剪/切片后：从源时钟 SRT 按片段重映射句级+词级（即时预览）。
 
@@ -19956,10 +19973,20 @@ class DynamicCaptionPage(QWidget):
         word_srt = filter_asr_junk_srt(word_srt)
         phrase_srt = filter_asr_junk_srt(phrase_srt)
         phrase_srt,fixes=fix_srt_overlaps(phrase_srt)
-        # 导出回写的是成片时钟字幕，只更新工作副本/界面，不覆盖源时钟快照、不强制 aligned
-        # （源轴由识别时 _mark_captions_source_timed 保存，裁剪始终从源重映射）
-        self.timeline_words[key]=align_word_srt_to_phrase_srt(word_srt, phrase_srt)
+        # The renderer has already mapped these words. Re-aligning to a shorter
+        # manual phrase track discards trailing words and corrupts future edits.
+        state = dict(self.timeline_edit_states.get(key, {}) or {})
+        external = self._timeline_key(self._caption_source_for_video(key)) != key
+        self._capture_missing_caption_sources(key, state, external)
+        self.timeline_words[key]=word_srt
         self.timeline_overrides[key]=phrase_srt
+        state["captions_timeline_aligned"] = True
+        self.timeline_edit_states[key] = state
+        tail_gap = srt_max_end_seconds(word_srt) - srt_max_end_seconds(phrase_srt)
+        if phrase_srt.strip() and tail_gap > 2:
+            self._append_run_log(
+                f"字幕校对轴比词级轴提前结束 {tail_gap:.1f}s：{Path(source).name}；"
+                "已保留完整词级轴和源字幕，请检查逐句 SRT 尾部是否缺失，未自动覆盖人工文案。")
         if self.caption_mode.currentText() == "自由文案动画（不对口型）":
             self.free_texts[key]=phrase_srt
         if fixes: self._append_run_log(f"已自动修正 {fixes} 处逐句字幕时间重叠：{Path(source).name}")

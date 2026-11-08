@@ -8,6 +8,37 @@ from test_reels_render_stability import APP, FFMPEG, STYLE, ffmpeg, d, probe
 
 
 class ExportTailTests(unittest.TestCase):
+    def test_export_feedback_keeps_tail_words_and_marks_product_clock(self):
+        from types import SimpleNamespace
+        words=d.events_to_srt([(1,2,"first"),(160,161.8,"tail")])
+        phrases=d.events_to_srt([(1,2,"first")])
+        source=d.events_to_srt([(6,7,"first"),(165,166.8,"tail")])
+        key="video.mp4"; logs=[]
+        page=SimpleNamespace(_timeline_key=lambda x:x,_caption_source_for_video=lambda x:x,
+            timeline_words={key:source},timeline_overrides={key:source},timeline_edit_states={},
+            caption_mode=SimpleNamespace(currentText=lambda:"speech"),
+            _timeline_source=lambda:"other",_append_run_log=logs.append,_refresh_task_queue=lambda:None)
+        page._capture_missing_caption_sources=lambda *a:d.DynamicCaptionPage._capture_missing_caption_sources(page,*a)
+        for _ in range(2):
+            d.DynamicCaptionPage._worker_timeline_ready(page,key,words,phrases)
+        self.assertEqual(d.parse_srt(page.timeline_words[key])[-1],(160,161.8,"tail"))
+        self.assertEqual(page.timeline_words_source[key],source)
+        self.assertTrue(page.timeline_edit_states[key]["captions_timeline_aligned"])
+        self.assertTrue(any("提前结束" in line for line in logs))
+
+    def test_missing_source_is_recovered_using_previous_edit_clock(self):
+        from types import SimpleNamespace
+        key="video.mp4"
+        words=d.events_to_srt([(1,2,"first"),(9,10,"last")])
+        old={"captions_timeline_aligned":True,"tracks":{"video":[dict(
+            start=0,end=15000,source_start=5000,source_end=20000)]}}
+        page=SimpleNamespace(timeline_words={key:words},timeline_overrides={key:words})
+        d.DynamicCaptionPage._capture_missing_caption_sources(page,key,old)
+        self.assertEqual(d.parse_srt(page.timeline_words_source[key]),[(6,7,"first"),(14,15,"last")])
+        new=[dict(start=0,end=10000,source_start=10000,source_end=20000)]
+        mapped=d.retime_srt_for_video_segments(page.timeline_words_source[key],new)
+        self.assertEqual(d.parse_srt(mapped),[(4,5,"last")])
+
     def test_midstream_color_change_does_not_reset_cut_graph(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
