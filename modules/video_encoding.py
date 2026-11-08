@@ -320,7 +320,7 @@ def _probe_stream_start_times(ffmpeg, path):
 def remux_zero_start(ffmpeg, path, fps=None):
     """重封装：去掉 AAC 编码延迟导致的 video start_time≈1 帧，防止达芬奇片头黑帧。
 
-    仅 copy + 视频 bitstream 时间戳重写，不二次损画质。失败时保留原文件。
+    仅平移视频原始 PTS/DTS，不按帧序号重建时钟；保留变帧率间隔及 B 帧顺序。
     若音画已从 ~0 起则跳过（避免每次合成多扫一遍大文件）。
     """
     from pathlib import Path
@@ -336,20 +336,14 @@ def remux_zero_start(ffmpeg, path, fps=None):
     except Exception:
         pass
     temporary = path.with_name(f"{path.stem}.zts_{os.getpid()}{path.suffix}")
-    rate = float(fps) if fps and float(fps) > 1 else _probe_video_fps(ffmpeg, path, 30.0)
-    # 保留合理小数；常见 24/25/30/29.97
-    if abs(rate - round(rate)) < 0.02:
-        rate_expr = str(int(round(rate)))
-    else:
-        rate_expr = f"{rate:.3f}".rstrip("0").rstrip(".")
     command = [
         str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(path),
         "-map", "0:v:0?", "-map", "0:a:0?",
         "-c", "copy",
-        "-bsf:v", f"setts=ts=N/{rate_expr}/TB",
+        "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS",
         "-muxdelay", "0", "-muxpreload", "0",
-        "-avoid_negative_ts", "make_zero",
+        "-avoid_negative_ts", "disabled",
         "-movflags", "+faststart",
         str(temporary),
     ]

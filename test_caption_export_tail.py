@@ -8,6 +8,98 @@ from test_reels_render_stability import APP, FFMPEG, STYLE, ffmpeg, d, probe
 
 
 class ExportTailTests(unittest.TestCase):
+    def test_group_preferences_remember_choices_without_disabling_transcription(self):
+        # Full UI initialization loads application fonts; isolate from the
+        # pixel-comparison tests' font caches and from the user's QSettings.
+        import os,sys,subprocess
+        if not os.environ.get("VT_GROUP_PREF_TEST_CHILD"):
+            result=subprocess.run([sys.executable,"-m","unittest",
+                "test_caption_export_tail.ExportTailTests.test_group_preferences_remember_choices_without_disabling_transcription"],
+                env={**os.environ,"VT_GROUP_PREF_TEST_CHILD":"1"},capture_output=True,timeout=60)
+            self.assertEqual(result.returncode,0,result.stderr.decode("utf-8","replace"))
+            return
+        from PySide6.QtCore import QSettings
+        with tempfile.TemporaryDirectory() as directory:
+            store=QSettings(str(Path(directory)/"preferences.ini"),QSettings.Format.IniFormat)
+            with patch.object(d,"QSettings",return_value=store):
+                def page():
+                    return d.DynamicCaptionPage(None,None,lambda:FFMPEG,["local"],"local")
+                first=page()
+                self.assertIn("快速",first.group_trim_mode.currentText())
+                self.assertFalse(first.group_skip_transcript.isChecked())
+                first.group_trim_mode.setCurrentText("仅按文案边界")
+                first.group_skip_transcript.setChecked(True)
+                second=page()
+                self.assertEqual(second.group_trim_mode.currentText(),"仅按文案边界")
+                self.assertTrue(second.group_skip_transcript.isChecked())
+                second.group_auto_timeline.setChecked(True)
+                second.group_trim_mode.setCurrentText("快速声音边界")
+                third=page()
+                self.assertFalse(third.group_skip_transcript.isChecked())
+                self.assertTrue(third.group_auto_timeline.isChecked())
+                for widget in (first,second,third):
+                    widget.close()
+                    widget.canva_timeline.scroll.viewport().removeEventFilter(widget.canva_timeline)
+                    import shiboken6
+                    shiboken6.delete(widget)
+
+    def test_workspace_uses_picture_duration_when_audio_is_longer(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"long_audio.mp4"
+            ffmpeg("-f","lavfi","-i","color=s=108x192:r=25:d=2",
+                   "-f","lavfi","-i","sine=frequency=440:duration=5",
+                   "-c:v","libx264","-c:a","aac",source)
+            page=SimpleNamespace(_timeline_key=lambda p:str(Path(p).resolve()),
+                                 find_ffmpeg=lambda:FFMPEG,_media_duration_cache={})
+            duration=d.DynamicCaptionPage._resolve_timeline_duration_ms(page,str(source))
+            self.assertEqual(duration,2000)
+
+    def test_zero_start_preserves_variable_frame_times_even_with_fps_hint(self):
+        from modules import video_encoding as encoding
+        import subprocess,json
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"variable.mp4"
+            ffmpeg("-f","lavfi","-i","testsrc2=s=108x192:r=10:d=4",
+                   "-f","lavfi","-i","sine=frequency=440:duration=4",
+                   "-vf","select='if(lt(t,2),1,not(mod(n,2)))'",
+                   "-fps_mode","vfr","-c:v","libx264","-c:a","aac",source)
+            def pts():
+                raw=subprocess.check_output([str(Path(FFMPEG).with_name("ffprobe.exe")),
+                    "-v","error","-select_streams","v:0","-show_packets",
+                    "-show_entries","packet=pts_time","-of","json",str(source)])
+                values=sorted(float(p["pts_time"]) for p in json.loads(raw)["packets"])
+                return [round(t-values[0],4) for t in values]
+            before=pts()
+            durations_before=d.media_stream_durations(FFMPEG,source)
+            with patch.object(encoding,"_probe_stream_start_times",return_value=(.1,0)):
+                self.assertTrue(encoding.remux_zero_start(FFMPEG,source,fps=30))
+            self.assertEqual(pts(),before)
+            video,audio=d.media_stream_durations(FFMPEG,source)
+            self.assertAlmostEqual(video,durations_before[0],delta=.001)
+            self.assertAlmostEqual(audio,durations_before[1],delta=.001)
+
+    def test_sixteen_cuts_preserve_workspace_gaps_with_and_without_aac(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            for audio in (False,True):
+                source=root/f"source_{audio}.mp4"
+                args=["-f","lavfi","-i","testsrc2=s=108x192:r=25:d=22"]
+                if audio:
+                    args += ["-f","lavfi","-i","sine=frequency=440:sample_rate=48000:duration=22","-c:a","aac"]
+                ffmpeg(*args,"-c:v","libx264",source)
+                for gap in (0,50):
+                    segments=[dict(start=i*(1000+gap),end=i*(1000+gap)+1000,
+                                   source_start=i*1300+13,source_end=i*1300+1013)
+                              for i in range(16)]
+                    state={"tracks":{"video":segments}}
+                    output=d.render_timeline_edits(FFMPEG,source,state,root)
+                    picture,sound=d.media_stream_durations(FFMPEG,output)
+                    expected=segments[-1]["end"]/1000
+                    self.assertAlmostEqual(picture,expected,delta=.041)
+                    if audio:
+                        self.assertAlmostEqual(sound,expected,delta=.041)
+
     def test_new_reported_bounds_and_known_workspace_clock(self):
         for duration,start,end in [(30.629,30.783,31.203),(7.049,7.508,7.733),
                                    (15.721,15.896,16.165)]:

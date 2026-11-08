@@ -1592,6 +1592,20 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
                 raise RuntimeError(f"时间轴插入视频不存在：{media_path}")
             external_video_paths.append(media_path)
     transitions=list((state or {}).get("transitions",[]) or [])
+    # concat packs clips together; preserve explicit empty workspace intervals
+    # with black/silent segments instead of shortening the caption clock.
+    spaced_segments = []
+    cursor = 0
+    for item in segments:
+        position = int(item.get("start", 0))
+        if position > cursor:
+            if transitions:
+                raise RuntimeError("时间轴同时存在空隙和转场，暂不能可靠对齐；请先移除空隙或转场再导出。")
+            spaced_segments.append(dict(start=cursor, end=position, source_start=0,
+                                        source_end=position-cursor, media_type="gap"))
+        spaced_segments.append(item)
+        cursor = max(cursor, int(item.get("end", 0)))
+    segments = spaced_segments
     original_duration=max(1,int(media_duration(ffmpeg,source)*1000))
     try:
         first_speed=float((segments[0] or {}).get("speed",1.0) or 1.0)
@@ -1619,7 +1633,7 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
         {"path":str(path.resolve()),"mtime":path.stat().st_mtime_ns,"size":path.stat().st_size}
         for path in [*image_paths,*external_video_paths]
     ]
-    payload=json.dumps({"source":str(source.resolve()),"mtime":source.stat().st_mtime_ns,
+    payload=json.dumps({"clock_version":2,"source":str(source.resolve()),"mtime":source.stat().st_mtime_ns,
                         "segments":segments,"audio":original_audio_enabled,
                         "transitions":transitions,"extra_media":media_signatures},sort_keys=True)
     key=hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
@@ -1662,19 +1676,25 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
     filters=[]; concat_inputs=[]; segment_durations=[]
     for index,item in enumerate(segments):
         start=max(0,float(item.get("source_start",0))/1000)
-        end=max(start+.08,float(item.get("source_end",0))/1000)
+        minimum = .001 if item.get("media_type") == "gap" else .08
+        end=max(start+minimum,float(item.get("source_end",0))/1000)
         try:
             speed=max(0.25,min(4.0,float(item.get("speed",1.0) or 1.0)))
         except (TypeError,ValueError):
             speed=1.0
         source_duration=end-start
         # 时间轴输出时长 = 源时长 / 速度（2× 加速则更短）
-        segment_duration=max(0.08,source_duration/speed)
+        segment_duration=max(minimum,source_duration/speed)
         segment_durations.append(segment_duration)
         media_type=str(item.get("media_type","video"))
         media_path=Path(str(item.get("path",""))) if item.get("path") else None
         speed_pts="" if abs(speed-1.0)<0.001 else f",setpts=PTS/{speed:.6f}"
-        if media_type=="image":
+        if media_type=="gap":
+            filters.append(
+                f"color=c=black:s={source_width}x{source_height}:r=2000/{max(1, round(segment_duration*1000))}:d={segment_duration:.6f},"
+                f"settb=AVTB,trim=duration={segment_duration:.6f},setpts=PTS-STARTPTS[v{index}]"
+            )
+        elif media_type=="image":
             image_key=str(Path(str(item.get("path",""))).resolve())
             input_index=extra_input_indices[image_key]
             filters.append(
@@ -1704,7 +1724,7 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
                 external_audio_map.get(str(media_path.resolve()),False)
                 if media_type=="external_video" and media_path else source_has_audio
             )
-            if media_type=="image" or not input_has_audio:
+            if media_type in ("image", "gap") or not input_has_audio:
                 filters.append(
                     f"anullsrc=r=48000:cl=stereo,atrim=duration={segment_duration:.3f},"
                     f"asetpts=PTS-STARTPTS[a{index}]"
@@ -3303,7 +3323,7 @@ def _render_fingerprint(video, audio, settings):
     payload={"video":_media_signature(video),"audio":_media_signature(audio),"settings":settings,
              "watermarks":watermark_files,"font_assets":font_assets,
              "motion_tracks": motion_fp,
-             "caption_renderer_version":CAPTION_RENDERER_VERSION}
+             "caption_renderer_version":CAPTION_RENDERER_VERSION, "media_clock_version": 2}
     return hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str).encode("utf-8")).hexdigest()
 
 
@@ -5156,6 +5176,11 @@ class CaptionWorker(QObject):
                 bgm_delay_ms=max(0,int(bgm_track_state.get("start",0) or 0))
                 if edit_state.get("tracks"):
                     render_video=render_timeline_edits(self.ffmpeg,video,edit_state,self.output)
+                    picture_clock, audio_clock = media_stream_durations(self.ffmpeg, render_video)
+                    workspace_end = max((float(s.get("end", 0)) / 1000
+                                         for s in edit_tracks.get("video", [])), default=0)
+                    self.log.emit(f"剪辑时钟核对：工作区 {workspace_end:.3f}s｜"
+                                  f"实际画面 {picture_clock:.3f}s｜音频 {audio_clock:.3f}s。")
                     self.log.emit(
                         f"[{index + 1}/{len(self.videos)}] 已应用时间轴切片/删除："
                         f"{len(edit_state.get('tracks',{}).get('video',[]))} 个视频片段；"
@@ -8027,7 +8052,7 @@ class DynamicCaptionPage(QWidget):
             "快速声音边界",
             "不裁剪（保留完整片段）",
         ])
-        self.group_trim_mode.setCurrentText("智能混合边界（推荐）")
+        self.group_trim_mode.setCurrentText("快速声音边界")
         self.group_trim_mode.setToolTip(
             "只决定每段「从哪剪到哪」（去口气），不决定先后顺序。\n"
             "· 智能混合：用匹配到的分段文案定位正文，再用声音修正首尾。\n"
@@ -8098,6 +8123,16 @@ class DynamicCaptionPage(QWidget):
             "与「不转文案」相反：勾选则合成后自动批量提取字幕。\n"
             "若已勾选「不转文案」，本项会自动关闭且不会提取。"
         )
+        group_store = QSettings("VideoToolkit", "DynamicReels")
+        self.group_sort_mode.blockSignals(True)
+        self.group_sort_mode.setCurrentText(str(group_store.value("group_preferences/sort", "文件名自然排序（推荐）")))
+        self.group_sort_mode.blockSignals(False)
+        self.group_trim_mode.setCurrentText(str(group_store.value("group_preferences/trim", "快速声音边界")))
+        skip_saved = str(group_store.value("group_preferences/skip_transcript", False)).casefold() in ("true", "1", "yes")
+        self.group_skip_transcript.setChecked(skip_saved)
+        self.group_auto_timeline.setChecked(not skip_saved)
+        for control in (self.group_sort_mode, self.group_trim_mode):
+            control.currentTextChanged.connect(self._save_group_preferences)
         self.group_auto_timeline.toggled.connect(self._sync_group_transcript_flags_from_auto)
         self.group_skip_transcript.toggled.connect(self._sync_group_transcript_flags_from_skip)
         self.group_trim_mode.currentTextChanged.connect(self._on_group_trim_mode_changed)
@@ -11696,6 +11731,7 @@ class DynamicCaptionPage(QWidget):
 
     def _sync_group_transcript_flags_from_skip(self, checked: bool):
         self._user_set_transcript_pref = True
+        self._save_group_preferences()
         if not hasattr(self, "group_auto_timeline"):
             return
         self.group_auto_timeline.blockSignals(True)
@@ -11714,22 +11750,18 @@ class DynamicCaptionPage(QWidget):
         self.group_skip_transcript.blockSignals(True)
         self.group_skip_transcript.setChecked(not bool(checked))
         self.group_skip_transcript.blockSignals(False)
+        self._save_group_preferences()
+
+    def _save_group_preferences(self, *_):
+        store = QSettings("VideoToolkit", "DynamicReels")
+        store.setValue("group_preferences/sort", self.group_sort_mode.currentText())
+        store.setValue("group_preferences/trim", self.group_trim_mode.currentText())
+        store.setValue("group_preferences/skip_transcript", self.group_skip_transcript.isChecked())
+        store.sync()
 
     def _on_group_trim_mode_changed(self, text: str):
-        """切换到快速声音边界时，若用户未手动改过偏好，默认勾选「不转文案」。"""
-        if "快速" in str(text) and hasattr(self, "group_skip_transcript"):
-            if (
-                hasattr(self, "group_auto_timeline")
-                and self.group_auto_timeline.isChecked()
-                and not getattr(self, "_user_set_transcript_pref", False)
-            ):
-                # 程序自动勾选，不记为用户偏好
-                self.group_skip_transcript.blockSignals(True)
-                self.group_skip_transcript.setChecked(True)
-                self.group_skip_transcript.blockSignals(False)
-                self.group_auto_timeline.blockSignals(True)
-                self.group_auto_timeline.setChecked(False)
-                self.group_auto_timeline.blockSignals(False)
+        # Cutting speed and post-merge transcription are independent preferences.
+        self._save_group_preferences()
 
     def _group_merge_item_done(self, output, group_name, index, total):
         self._set_caption_task_status(output, "待提取（已重新合成）")
@@ -18623,7 +18655,7 @@ class DynamicCaptionPage(QWidget):
         self._refresh_canva_timeline(video_path)
 
     def _resolve_timeline_duration_ms(self, video_path: str) -> int:
-        """优先播放器时长（且路径匹配），否则 ffprobe / 缓存，保证分段轨不必等预览解码。
+        """优先实际画面时长；探测失败才回退播放器/旧缓存。
 
         分组合成 sidecar 合计可能与成品真实时长差几百毫秒～数秒（去口气/转场），
         绝不能单独用 sidecar 锁死标尺，否则字幕块会和音视频条错位。
@@ -18632,6 +18664,21 @@ class DynamicCaptionPage(QWidget):
         if not path:
             return 0
         video_key = self._timeline_key(path)
+        # Qt/container duration can be owned by a much longer audio stream.
+        # The visual workspace and caption validation must share picture time.
+        try:
+            signature = _media_signature(path)
+            clocks = getattr(self, "_picture_duration_cache", {})
+            cached_picture = clocks.get(video_key)
+            if cached_picture and cached_picture[0] == signature:
+                return cached_picture[1]
+            picture_ms = max(1, round(caption_media_duration(self.find_ffmpeg(), path) * 1000))
+            clocks[video_key] = (signature, picture_ms)
+            self._picture_duration_cache = clocks
+            self._media_duration_cache[video_key] = picture_ms
+            return picture_ms
+        except (OSError, ValueError, RuntimeError):
+            pass
         player_ms = 0
         if hasattr(self, "player"):
             try:
