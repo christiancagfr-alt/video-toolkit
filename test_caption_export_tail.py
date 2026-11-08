@@ -8,6 +8,37 @@ from test_reels_render_stability import APP, FFMPEG, STYLE, ffmpeg, d, probe
 
 
 class ExportTailTests(unittest.TestCase):
+    def test_midstream_color_change_does_not_reset_cut_graph(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            for i,matrix in enumerate(("bt709","smpte170m","bt709")):
+                ffmpeg("-f","lavfi","-i","testsrc2=s=108x192:r=24:d=2",
+                       "-f","lavfi","-i","sine=frequency=440:duration=2",
+                       "-c:v","libx264","-colorspace",matrix,"-color_primaries",matrix,
+                       "-color_trc",matrix,"-c:a","aac",root/f"{i}.mp4")
+            listing=root/"concat.txt"
+            listing.write_text("\n".join(f"file '{i}.mp4'" for i in range(3)),encoding="utf-8")
+            source=root/"changing.mp4"
+            ffmpeg("-f","concat","-safe","0","-i",listing,"-c","copy",source)
+            state={"tracks":{"video":[dict(start=i*1500,end=(i+1)*1500,
+                source_start=i*2000+100,source_end=i*2000+1600) for i in range(3)]}}
+            output=d.render_timeline_edits(FFMPEG,source,state,root)
+            video,audio=d.media_stream_durations(FFMPEG,output)
+            self.assertAlmostEqual(video,4.5,delta=.15)
+            self.assertAlmostEqual(audio,4.5,delta=.15)
+
+    def test_readable_but_truncated_edit_cache_is_rebuilt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); source=root/"source.mp4"
+            ffmpeg("-f","lavfi","-i","color=s=108x192:r=25:d=5","-c:v","libx264",source)
+            state={"tracks":{"video":[dict(start=0,end=3000,source_start=1000,source_end=4000)]}}
+            output=d.render_timeline_edits(FFMPEG,source,state,root)
+            ffmpeg("-f","lavfi","-i","color=s=108x192:r=25:d=0.5","-c:v","libx264",output)
+            self.assertGreater(output.stat().st_size,1024)
+            rebuilt=d.render_timeline_edits(FFMPEG,source,state,root)
+            self.assertEqual(rebuilt,output)
+            self.assertAlmostEqual(d.caption_media_duration(FFMPEG,output),3,delta=.05)
+
     def test_group_preferences_remember_choices_without_disabling_transcription(self):
         # Full UI initialization loads application fonts; isolate from the
         # pixel-comparison tests' font caches and from the user's QSettings.

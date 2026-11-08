@@ -1639,8 +1639,38 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
     key=hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
     cache=Path(cache_dir)/".timeline_edit_cache"; cache.mkdir(parents=True,exist_ok=True)
     output=cache/f"{source.stem[:28]}_{key}.mp4"
-    if output.is_file() and output.stat().st_size>1024:
+    expected_duration = 0.0
+    bounds_cache = {}
+    for item in segments:
+        kind = item.get("media_type", "video")
+        start = max(0, float(item.get("source_start", 0)) / 1000)
+        end = max(start + (.001 if kind == "gap" else .08), float(item.get("source_end", 0)) / 1000)
+        if kind not in ("image", "gap"):
+            origin = Path(item["path"]) if kind == "external_video" else source
+            if str(origin) not in bounds_cache:
+                bounds_cache[str(origin)] = caption_media_duration(ffmpeg, origin)
+            bound = bounds_cache[str(origin)]
+            if start >= bound:
+                raise RuntimeError(f"视频片段源范围越界：{item.get('name', '')} {start:.3f}–{end:.3f}s，"
+                                   f"源文件 {origin.name} 画面仅 {bound:.3f}s；请检查素材是否被替换或重新载入编辑状态。")
+            end = min(end, bound)
+        speed = max(.25, min(4., float(item.get("speed", 1.) or 1.)))
+        expected_duration += (end-start)/speed
+    # Transitions overlap clips; their target is computed below with the graph.
+    tolerance = max(.15, len(segments) * .05)
+    def valid_cached_duration():
+        if transitions:
+            return False
+        try:
+            return abs(caption_media_duration(ffmpeg, output)-expected_duration) <= tolerance
+        except (OSError, ValueError, RuntimeError):
+            return False
+    if output.is_file() and output.stat().st_size>1024 and valid_cached_duration():
         return output
+    diagnostic = output.with_suffix(".diagnostic.json")
+    diagnostic.write_text(json.dumps({"source":str(source), "source_signature":_media_signature(source),
+        "state":state, "expected_duration":expected_duration, "source_durations":bounds_cache},
+        ensure_ascii=False, indent=2), encoding="utf-8")
     source_has_audio=media_has_audio(ffmpeg,source)
     external_audio_map={
         str(path.resolve()):media_has_audio(ffmpeg,path)
@@ -1794,7 +1824,9 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
         filters.append("".join(f"[v{i}]" for i in range(len(segments)))+
                        f"concat=n={len(segments)}:v=1:a=0[vout]")
         maps=["-map","[vout]","-an"]
-    command=[ffmpeg,"-hide_banner","-loglevel","error","-y","-i",str(source),
+    # Concatenated H.264 can switch color metadata mid-stream. Reinitializing
+    # trim/concat then discards buffered segments and may report a short success.
+    command=[ffmpeg,"-hide_banner","-loglevel","error","-y","-reinit_filter","0","-i",str(source),
              *extra_input_args,
              "-filter_complex",";".join(filters),*maps,
              "-c:v","libx264","-preset","ultrafast","-crf","22","-pix_fmt","yuv420p","-threads","0"]
@@ -1807,6 +1839,10 @@ def render_timeline_edits(ffmpeg, source, state, cache_dir):
                           creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0)
     if result.returncode!=0 or not output.is_file():
         raise RuntimeError("时间轴切片渲染失败："+result.stderr.decode("utf-8","replace")[-800:])
+    if not transitions and not valid_cached_duration():
+        actual = caption_media_duration(ffmpeg, output)
+        raise RuntimeError(f"视频切片结果时长异常：按源片段应为 {expected_duration:.3f}s，实际 {actual:.3f}s；"
+                           f"已停止字幕处理，编辑诊断保存在 {diagnostic}")
     return output
 
 
