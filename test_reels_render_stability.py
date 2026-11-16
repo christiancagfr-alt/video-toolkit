@@ -53,7 +53,88 @@ def pixels(image):
     return np.frombuffer(image.constBits(), dtype=np.uint8).reshape(image.height(), image.width(), 4).copy()
 
 
+class PreviewReadClockTests(unittest.TestCase):
+    def harness(self, fps, mapped=False):
+        class Capture:
+            reads = 0
+            seeks = 0
+            def isOpened(self): return True
+            def get(self, prop): return fps
+            def set(self, prop, value): self.seeks += 1
+            def read(self):
+                self.reads += 1
+                return True, object()
+        capture = Capture()
+        h = SimpleNamespace(preview_capture=capture, _preview_capture_pos_ms=0.,
+            player=SimpleNamespace(position=lambda:0),
+            _timeline_edits_active=lambda:mapped,
+            _map_timeline_ms_to_source=lambda ms:(ms, ""),
+            _bgr_frame_to_qimage=lambda frame:QImage(), preview_base_image=QImage())
+        return h, capture
+
+    def test_reader_tracks_decoded_frames_instead_of_target(self):
+        h, cap = self.harness(30)
+        d.DynamicCaptionPage._render_preview_frame(h, target_override=100)
+        self.assertEqual(cap.reads, 1)
+        self.assertAlmostEqual(h._preview_capture_pos_ms, 1000/30)
+
+    def test_faster_timer_does_not_decode_ahead_and_slower_timer_catches_up(self):
+        for fps in (24,30,60):
+            for mapped in (False,True):
+                with self.subTest(fps=fps,mapped=mapped):
+                    h, cap = self.harness(fps,mapped)
+                    for target in range(0,10000,42):
+                        d.DynamicCaptionPage._render_preview_frame(h,target_override=target)
+                        self.assertLessEqual(h._preview_capture_pos_ms-target,1000/fps+.01)
+                        self.assertLess(target-h._preview_capture_pos_ms,125)
+                    self.assertEqual(cap.seeks,0)
+
+    def test_user_seek_still_repositions_decoder(self):
+        h, cap = self.harness(30)
+        d.DynamicCaptionPage._render_preview_frame(h,force=True,target_override=5000)
+        self.assertEqual(cap.seeks,1)
+        self.assertAlmostEqual(h._preview_capture_pos_ms,5000+1000/30)
+
+    def test_cut_seeks_even_when_source_jump_is_under_one_second(self):
+        h, cap = self.harness(30,True)
+        d.DynamicCaptionPage._render_preview_frame(h,target_override=0)
+        h._map_timeline_ms_to_source=lambda ms:(ms+500, "")
+        d.DynamicCaptionPage._render_preview_frame(h,target_override=42)
+        self.assertEqual(cap.seeks,1)
+        self.assertAlmostEqual(h._preview_capture_pos_ms,542+1000/30)
+
+
 class AsrTimingTests(unittest.TestCase):
+    def test_collapsed_window_retries_shorter_audio_with_original_offsets(self):
+        import app as main
+        calls = []
+        class Model:
+            def transcribe(self, samples, **kwargs):
+                duration = len(samples)/16000
+                calls.append(duration)
+                if duration > 16:
+                    words = [SimpleNamespace(start=10.,end=10.,word="broken") for _ in range(4)]
+                else:
+                    words = [SimpleNamespace(start=i*.5,end=i*.5+.3,word="word")
+                             for i in range(int(duration*2))]
+                return iter([SimpleNamespace(start=0.,end=duration,text="words",words=words)]),SimpleNamespace(language="el")
+        with tempfile.TemporaryDirectory() as temp:
+            source=Path(temp)/"audio.wav"
+            ffmpeg("-f","lavfi","-i","sine=frequency=440:sample_rate=16000:duration=30",source)
+            worker=main.TranscribeWorker(None,main.LOCAL_PROVIDER,"medium",[],temp,"el",False,FFMPEG,translate_result=False)
+            with patch.object(main.TranscribeWorker,"_shared_local_model",Model()), \
+                 patch.object(main.TranscribeWorker,"_shared_local_model_name","medium"), \
+                 patch.object(main.TranscribeWorker,"_shared_local_device","cpu"), \
+                 patch.object(main,"write_app_log"):
+                _,_,raw=worker._local_whisper(source)
+            self.assertTrue(any(n>16 for n in calls))
+            self.assertTrue(any(n<=16 for n in calls))
+            words=raw["words"]
+            self.assertLess(words[0]["start"],.1)
+            self.assertGreater(words[-1]["end"],29)
+            self.assertLessEqual(words[-1]["end"],30)
+            self.assertTrue(all(w["text"]!="broken" for w in words))
+
     def test_local_worker_retries_missing_window_tail(self):
         import app as main
         calls = []

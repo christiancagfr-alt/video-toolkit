@@ -50,6 +50,39 @@ def validate_asr_segments(segments, duration):
     return sorted(result, key=lambda s: (s["start"], s["end"]))
 
 
+def coalesce_zero_length_words(segments):
+    """Keep text of rounded zero-length words on a touching real word span.
+
+    Do not manufacture timing, bridge silence or relax invalid/reversed spans.
+    Isolated zero-length words remain invalid and follow the normal retry path.
+    """
+    result = []
+    for segment in segments or []:
+        words = [dict(w) for w in segment.get("words") or []]
+        # A whole run collapsed to one instant is failed alignment/hallucination,
+        # not harmless token rounding. Let the caller retry shorter audio.
+        run = 0
+        for w in words:
+            run = run + 1 if w.get("start") == w.get("end") else 0
+            if run > 2:
+                raise CaptionTimingError("连续多个词没有有效时长，需要缩短音频窗口重识别")
+        merged = []
+        for index, word in enumerate(words):
+            start, end = float(word["start"]), float(word["end"])
+            if math.isfinite(start) and start == end:
+                if merged and merged[-1]["end"] > merged[-1]["start"] and abs(start-merged[-1]["end"]) <= .02:
+                    merged[-1]["text"] = (merged[-1].get("text", "") + " " + word.get("text", "")).strip()
+                    continue
+                if index+1 < len(words):
+                    following = words[index+1]
+                    if following["end"] > following["start"] and abs(following["start"]-start) <= .02:
+                        following["text"] = (word.get("text", "") + " " + following.get("text", "")).strip()
+                        continue
+            merged.append(word)
+        result.append({**segment, "words": merged})
+    return result
+
+
 def validate_srt_timing(srt, duration):
     """Reject malformed/out-of-media SRT before caching, estimating or rendering."""
     pattern = re.compile(r"^[ \t]*(\d+):(\d{2}):(\d{2})[,.](\d+)[ \t]*-->[ \t]*(\d+):(\d{2}):(\d{2})[,.](\d+)[ \t]*\r?$", re.M)

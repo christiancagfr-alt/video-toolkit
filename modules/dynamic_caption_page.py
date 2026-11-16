@@ -1290,19 +1290,18 @@ def align_word_srt_to_phrase_srt(word_srt, phrase_srt, old_phrase_srt=""):
         return word_srt or ""
 
     result = []
-    cursor = 0
     for index, (new_start, new_end, new_text) in enumerate(phrases):
         new_tokens = tokens_for(new_text)
         if not new_tokens or new_end <= new_start:
             continue
         if index < len(old_phrases):
             old_start, old_end, old_text = old_phrases[index]
-            consume = max(1, len(tokens_for(old_text)))
         else:
             old_start, old_end = new_start, new_end
-            consume = len(new_tokens)
-        source_words = words[cursor:cursor + consume]
-        cursor += consume
+        # Provider word boundaries need not match text tokenization (punctuation,
+        # compounds, CJK, or edited text). Consuming by token count shifts every
+        # later phrase after the first mismatch. Assign by the old audio clock.
+        source_words = [w for w in words if old_start <= (w[0]+w[1])/2 < old_end]
         duration = max(0.04, new_end - new_start)
 
         if len(source_words) == len(new_tokens):
@@ -1364,16 +1363,23 @@ def align_word_srt_to_phrase_srt(word_srt, phrase_srt, old_phrase_srt=""):
         # Clamp provider overlaps and rounding drift.  Leave a tiny monotonic slot for
         # every remaining word so no highlight can escape into the adjacent sentence.
         fitted = []
-        previous_end = new_start
         count = len(raw)
+        # Reserve integer milliseconds for remaining tokens. Merely limiting
+        # their starts lets an earlier word consume the entire phrase; later
+        # words then round to start == end and fail export validation.
+        phrase_start_ms = round(new_start * 1000)
+        phrase_end_ms = round(new_end * 1000)
+        if phrase_end_ms - phrase_start_ms < count:
+            if phrase_end_ms > phrase_start_ms:
+                result.append((phrase_start_ms / 1000, phrase_end_ms / 1000, new_text))
+            continue
+        previous_end = phrase_start_ms
         for word_index, (start, end, token) in enumerate(raw):
             remaining = count - word_index - 1
-            latest_end = new_end - remaining * 0.001
-            start = max(new_start, previous_end, min(float(start), latest_end - 0.001))
-            end = min(new_end, max(start + 0.001, float(end)))
-            if end <= start:
-                end = min(new_end, start + 0.001)
-            fitted.append((start, end, token))
+            latest_end = phrase_end_ms - remaining
+            start = max(phrase_start_ms, previous_end, min(round(float(start) * 1000), latest_end - 1))
+            end = min(latest_end, max(start + 1, round(float(end) * 1000)))
+            fitted.append((start / 1000, end / 1000, token))
             previous_end = end
         result.extend(fitted)
     return events_to_srt(result) if result else (word_srt or "")
@@ -13670,7 +13676,20 @@ class DynamicCaptionPage(QWidget):
             gap = 0
         else:
             gap = target - current
-            need_seek = force or gap < -150 or gap > 1200 or use_map and abs(gap) > 80
+            need_seek = force or gap < -150 or gap > 1200
+        previous_target = getattr(self, "_preview_last_mapped_target", None)
+        self._preview_last_mapped_target = (timeline_ms, target) if use_map else None
+        if use_map and previous_target is not None:
+            timeline_step = timeline_ms - previous_target[0]
+            source_step = target - previous_target[1]
+            if abs(source_step - timeline_step) > 80:
+                need_seek = True  # A real cut, rather than ordinary decode lag.
+        # The read head is the next decoded frame, not the requested player
+        # position. A faster timer must not consume frames ahead of playback.
+        if not need_seek and gap < -1:
+            if not self.preview_base_image.isNull():
+                self._present_preview_image(self.preview_base_image, timeline_ms / 1000.0)
+            return
         if need_seek:
             try:
                 capture.set(cv2.CAP_PROP_POS_MSEC, float(target))
@@ -13710,9 +13729,10 @@ class DynamicCaptionPage(QWidget):
             return
         try:
             fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0) or 30.0
-            # 读头跟播放器对齐：取 max(上一帧推进, 目标) 再加一帧时长，避免越播越偏
+            # Only decoded/skipped frames advance the read head. Using the
+            # target here hides decode lag and makes video drift behind audio.
             prev = float(getattr(self, "_preview_capture_pos_ms", 0) or 0)
-            self._preview_capture_pos_ms = max(prev, float(target)) + (1000.0 / fps)
+            self._preview_capture_pos_ms = prev + (1000.0 / fps)
         except Exception:
             self._preview_capture_pos_ms = float(target)
         image = self._bgr_frame_to_qimage(frame)
@@ -15277,7 +15297,11 @@ class DynamicCaptionPage(QWidget):
         editor_srt = ""
         if hasattr(self, "override_text"):
             editor_srt = (self.override_text.toPlainText() or "").strip()
-        if not need_map and hasattr(self, "canva_timeline"):
+        if not need_map and editor_srt and "-->" in editor_srt:
+            # The editor already owns the displayed text. Avoid serializing every
+            # timeline clip on every video frame only to discard that result.
+            phrase_srt = editor_srt
+        elif not need_map and hasattr(self, "canva_timeline"):
             try:
                 from .canva_timeline import write_srt
                 canvas = getattr(self.canva_timeline, "canvas", None) or self.canva_timeline
@@ -17042,6 +17066,15 @@ class DynamicCaptionPage(QWidget):
             video_sec = 0.0
         if video_sec < 3.0:
             return
+        for label, timeline in (("词级", word_srt), ("逐句", phrase_srt)):
+            suspicious = [(start, end, text) for start, end, text in parse_srt(timeline or "")
+                          if end - start > 30]
+            if suspicious:
+                start, end, _ = max(suspicious, key=lambda cue: cue[1] - cue[0])
+                self._append_run_log(
+                    f"⚠ {label}字幕存在异常长时间段：{start:.3f}–{end:.3f}s"
+                    f"（持续 {end-start:.1f}s，共 {len(suspicious)} 条）：{Path(source).name}；"
+                    "需要对照原音核查识别时间戳，未自动拉伸、截短或删除字幕。")
         cue_end = srt_max_end_seconds(word_srt or "") or srt_max_end_seconds(phrase_srt or "")
         if cue_end <= 0.05:
             return

@@ -15,6 +15,34 @@ from modules import dynamic_caption_page as d
 import app as main
 
 
+class ProviderPhraseGapTests(unittest.TestCase):
+    def test_gladia_keeps_nested_word_times_and_subtitles(self):
+        payload={"status":"done","result":{"transcription":{
+            "full_transcript":"hello world", "utterances":[{"start":1,"end":5,"text":"hello world",
+            "words":[{"start":1,"end":1.2,"word":"hello"},{"start":4.8,"end":5,"word":"world"}]}],
+            "subtitles":[{"format":"srt","subtitles":"1\n00:00:01,000 --> 00:00:05,000\nhello world\n"}]}}}
+        response=lambda data:SimpleNamespace(status_code=200,json=lambda:data)
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/"audio.wav";path.write_bytes(b"fake")
+            worker=main.TranscribeWorker(None,"Gladia","default",[],td,"en",False,FFMPEG,translate_result=False)
+            with patch.object(main.requests,"post",side_effect=[response({"audio_url":"https://api.gladia.io/audio"}),response({"id":"test"})]), \
+                 patch.object(main.requests,"get",return_value=response(payload)):
+                srt,_,raw=worker._gladia(path,"test-key")
+            self.assertEqual([(w["start"],w["end"]) for w in raw["words"]],[(1,1.2),(4.8,5)])
+            self.assertIn("00:00:05,000",srt)
+
+    def test_sparse_words_do_not_bridge_ninety_second_gap(self):
+        rows = main.words_to_segments([
+            dict(start=260,end=260.4,text="hello"),
+            dict(start=350,end=350.5,text="world")])
+        self.assertEqual([(r["start"],r["end"]) for r in rows],[(260,260.4),(350,350.5)])
+
+    def test_adjacent_words_preserve_original_clock(self):
+        rows=main.words_to_segments([dict(start=1,end=1.3,text="hello"),
+                                    dict(start=1.4,end=1.9,text="world.")])
+        self.assertEqual(rows,[dict(start=1,end=1.9,text="hello world.")])
+
+
 def segment(words):
     return dict(start=words[0]["start"], end=words[-1]["end"],
                 text=" ".join(w["text"] for w in words), words=words)
@@ -25,6 +53,49 @@ def word(start, end, text="word"):
 
 
 class TimingIntegrityTests(unittest.TestCase):
+    def test_provider_token_count_difference_does_not_shift_later_phrase(self):
+        words=d.events_to_srt([(0,.3,"ice"),(.3,.6,"cream"),(.7,1,"here"),
+                              (5,5.3,"next"),(5.4,5.8,"sentence")])
+        old=d.events_to_srt([(0,1,"ice-cream here"),(5,6,"next sentence")])
+        corrected=d.events_to_srt([(0,1,"ice cream here"),(5,6,"next sentence")])
+        rows=d.parse_srt(d.align_word_srt_to_phrase_srt(words,corrected,old))
+        self.assertEqual(rows[-2:],[(5,5.3,"next"),(5.4,5.8,"sentence")])
+
+    def test_corrected_overlapping_words_reserve_nonzero_millisecond_slots(self):
+        words = d.events_to_srt([(255,256.225,"one"),(256.2,256.225,"two"),(256.21,256.225,"three")])
+        phrases = d.events_to_srt([(255,256.225,"one two three")])
+        result = d.align_word_srt_to_phrase_srt(words,phrases)
+        timing.validate_srt_timing(result,257)
+        rows = d.parse_srt(result)
+        self.assertEqual([r[2] for r in rows],["one","two","three"])
+        self.assertEqual(rows[-1][1],256.225)
+        self.assertTrue(all(a[1]<=b[0] for a,b in zip(rows,rows[1:])))
+
+    def test_phrase_too_short_for_individual_words_preserves_all_text(self):
+        phrases=d.events_to_srt([(1,1.002,"one two three")])
+        words=d.events_to_srt([(1,1.002,"one"),(1,1.002,"two"),(1,1.002,"three")])
+        result=d.align_word_srt_to_phrase_srt(words,phrases)
+        timing.validate_srt_timing(result,2)
+        self.assertEqual(d.parse_srt(result),[(1,1.002,"one two three")])
+
+    def test_zero_length_context_word_keeps_text_without_extending_clock(self):
+        original = [segment([word(27.5, 27.96, "hello"), word(27.96, 27.96, "world")])]
+        repaired = timing.validate_asr_segments(timing.coalesce_zero_length_words(original), 28)
+        self.assertEqual(repaired[0]["words"], [word(27.5, 27.96, "hello world")])
+        self.assertEqual(len(original[0]["words"]), 2)
+        self.assertEqual(original[0]["words"][0]["text"], "hello")
+
+    def test_zero_length_leading_word_keeps_text_on_touching_next_word(self):
+        rows = [segment([word(0, 0, "hello"), word(0, .3, "world")])]
+        repaired = timing.validate_asr_segments(timing.coalesce_zero_length_words(rows), 1)
+        self.assertEqual(repaired[0]["words"], [word(0, .3, "hello world")])
+
+    def test_zero_word_cannot_bridge_silence_or_hide_invalid_clock(self):
+        for bad in (word(2, 2), word(2, 1), word(float("nan"), 2)):
+            rows = [segment([word(0, .3), bad])]
+            with self.assertRaises(timing.CaptionTimingError):
+                timing.validate_asr_segments(timing.coalesce_zero_length_words(rows), 3)
+
     def test_middle_gap_with_valid_tail_is_recovered_without_replacing_anchors(self):
         original = [word(i * .5, i * .5 + .3, f"old{i}") for i in range(30)
                     if not 8 <= i < 14]

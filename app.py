@@ -97,7 +97,7 @@ _startup_trace("tool modules ready")
 
 
 APP_NAME = "视频工具合集"
-APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.87").strip().lstrip("v") or "1.7.87"
+APP_VERSION = os.environ.get("VIDEO_TOOLKIT_VERSION", "1.7.88").strip().lstrip("v") or "1.7.88"
 APP_DISPLAY_NAME = f"{APP_NAME}  v{APP_VERSION}"
 # 应用内「检查更新」固定走个人仓库发布页（与 org 分离）
 UPDATE_REPO = "christiancagfr-alt/video-toolkit"
@@ -760,6 +760,12 @@ def words_to_segments(words):
             continue
         from modules.asr_timing import checked_span
         w_start, w_end = checked_span(word.get("start"), word.get("end"))
+        # Close the preceding phrase BEFORE a distant word is appended.
+        # Otherwise a sparse provider result turns a long silence into one cue.
+        if current and (w_start - end >= .52 or w_end - start > 6):
+            joined = "".join(current) if any(any("\u4e00" <= c <= "\u9fff" for c in x) for x in current) else " ".join(current)
+            segments.append({"start": start, "end": end, "text": joined})
+            current, start, end = [], None, None
         if start is None:
             start = w_start
         current.append(text)
@@ -1440,7 +1446,7 @@ class TranscribeWorker(QObject):
                     beam_size=beam_size,
                     best_of=1,
                     patience=1.0,
-                    temperature=0.0,
+                    temperature=(0.0, 0.2, 0.4) if beam_size >= 5 else 0.0,
                     vad_filter=use_vad,
                     word_timestamps=True,
                     condition_on_previous_text=False,
@@ -1465,10 +1471,22 @@ class TranscribeWorker(QObject):
         from modules.asr_timing import (
             CaptionTimingError, asr_coverage, asr_gaps, asr_needs_retry,
             merge_asr_recovery, owned_asr_segments, recognition_windows, validate_asr_segments,
+            coalesce_zero_length_words,
         )
 
-        def transcribe_file(model, path, *, offset=0.0, beam_size=None, use_vad=None, label=""):
+        def validate_local_words(raw, duration):
+            repaired = coalesce_zero_length_words(raw)
+            checked = validate_asr_segments(repaired, duration)
+            joined = sum(len(s.get("words") or []) for s in raw) - sum(
+                len(s.get("words") or []) for s in repaired)
+            if joined:
+                _emit(f"本地识别：{joined} 个零时长词已并入相邻词，保留文字且不延长时间轴。")
+            return checked
+
+        def transcribe_file(model, path, *, offset=0.0, beam_size=None, use_vad=None, label="", _depth=0):
             import wave
+            if use_vad is False and beam_size is None:
+                beam_size = 5
             try:
                 with wave.open(str(path)) as wav:
                     duration = wav.getnframes() / wav.getframerate()
@@ -1478,13 +1496,41 @@ class TranscribeWorker(QObject):
             # stream. Validation still uses the picture clock, never the ASR end.
             raw, info = _transcribe_file_once(model, path, beam_size=beam_size, use_vad=use_vad, label=label)
             try:
-                checked = validate_asr_segments(raw, duration)
+                checked = validate_local_words(raw, duration)
             except CaptionTimingError as exc:
-                if use_vad is False:
-                    raise
-                _emit(f"识别时间戳无效，关闭 VAD 重试当前片段：{exc}")
-                raw, info = _transcribe_file_once(model, path, beam_size=beam_size, use_vad=False, label=label)
-                checked = validate_asr_segments(raw, duration)
+                try:
+                    if use_vad is False:
+                        raise exc
+                    _emit(f"识别时间戳无效，关闭 VAD 并提高解码精度重试当前片段：{exc}")
+                    raw, info = _transcribe_file_once(model, path, beam_size=max(5, beam_size or 1), use_vad=False, label=label)
+                    checked = validate_local_words(raw, duration)
+                except CaptionTimingError:
+                    if duration <= 6 or _depth >= 3:
+                        raise
+                    # Retry only the broken window, on shorter acoustic context.
+                    # Do not turn collapsed timestamps into invented word slots.
+                    import tempfile
+                    checked = []
+                    _emit(f"当前 {duration:.1f}s 片段词轴异常，拆成短窗重新识别（第 {_depth+1} 级）。")
+                    with wave.open(str(path), "rb") as src, tempfile.TemporaryDirectory(prefix="asr_retry_", dir=prep_dir) as td:
+                        rate = src.getframerate()
+                        params = src.getparams()
+                        middle = duration / 2
+                        for n, (start, end) in enumerate(((0., middle), (middle, duration))):
+                            if self.cancelled:
+                                raise RuntimeError("任务已取消")
+                            left, right = max(0., start-.5), min(duration, end+.5)
+                            src.setpos(round(left*rate))
+                            samples = src.readframes(round(right*rate)-round(left*rate))
+                            subpath = Path(td) / f"{n}.wav"
+                            with wave.open(str(subpath), "wb") as dest:
+                                dest.setparams(params)
+                                dest.writeframes(samples)
+                            recovered, info = transcribe_file(
+                                model, subpath, offset=left, beam_size=max(5, beam_size or 1),
+                                use_vad=False, label=label+f"/短窗{n+1}", _depth=_depth+1)
+                            checked.extend(owned_asr_segments(recovered, start, end, duration))
+                    checked = validate_asr_segments(checked, duration)
             return [
                 {**s, "start": s["start"] + offset, "end": s["end"] + offset,
                  "words": [{**w, "start": w["start"] + offset, "end": w["end"] + offset}
@@ -2124,7 +2170,7 @@ class TranscribeWorker(QObject):
                 data = payload.get("result") or {}
                 transcription = data.get("transcription") or {}
                 plain = transcription.get("full_transcript", "") if isinstance(transcription, dict) else str(transcription)
-                subtitles = data.get("subtitles") or []
+                subtitles = (transcription.get("subtitles") if isinstance(transcription, dict) else None) or data.get("subtitles") or []
                 srt = ""
                 if isinstance(subtitles, list):
                     for sub in subtitles:
@@ -2141,8 +2187,14 @@ class TranscribeWorker(QObject):
                     utterances = transcription.get("utterances", []) if isinstance(transcription, dict) else []
                     srt = (segments_to_srt(utterances, language=lang) if utterances
                            else clean_model_srt(plain, language=lang))
+                words = [
+                    {"start": w.get("start"), "end": w.get("end"),
+                     "text": w.get("word") or w.get("text") or ""}
+                    for utterance in (transcription.get("utterances") or [] if isinstance(transcription, dict) else [])
+                    for w in (utterance.get("words") or [])
+                ]
                 return clean_model_srt(srt, language=lang), plain, {
-                    "provider": "Gladia", "response": payload, "language": lang}
+                    "provider": "Gladia", "response": payload, "language": lang, "words": words}
             if status == "error":
                 raise ApiFailure(json.dumps(payload, ensure_ascii=False)[:800])
             time.sleep(5)
